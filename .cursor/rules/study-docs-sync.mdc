@@ -1,0 +1,62 @@
+---
+description: Auto-check upstream changes against study documentation when on the study branch
+globs:
+  - docs/study/**
+alwaysApply: false
+---
+
+# Study Docs Sync Check
+
+When working on the `study/architecture-analysis` branch or editing files in `docs/study/`:
+
+## On Session Start
+
+1. Run `git fetch origin` and `git log --oneline HEAD..origin/main` to check for upstream changes
+2. If there are new commits, run `git diff HEAD..origin/main --stat` to see which files changed
+3. Cross-reference changed files against the source code reference mapping below
+4. If any referenced source files changed, rebase and update the affected docs
+5. After updating, commit with message format: `docs: update study docs for upstream changes`
+
+## Source File → Document Mapping
+
+| Source File | Study Document(s) |
+|---|---|
+| `packages/ai/src/types.ts` | `01-pi-ai-layer.md` |
+| `packages/ai/src/stream.ts` | `01-pi-ai-layer.md` |
+| `packages/ai/src/utils/event-stream.ts` | `01-pi-ai-layer.md` |
+| `packages/ai/src/providers/*.ts` | `01-pi-ai-layer.md` |
+| `packages/ai/src/models.ts` | `01-pi-ai-layer.md` |
+| `packages/agent/src/agent-loop.ts` | `02-agent-core-layer.md` |
+| `packages/agent/src/agent.ts` | `02-agent-core-layer.md` |
+| `packages/agent/src/types.ts` | `02-agent-core-layer.md` |
+| `packages/coding-agent/src/main.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/cli/args.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/sdk.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/agent-session.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/messages.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/system-prompt.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/model-resolver.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/settings-manager.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/resource-loader.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/auth-storage.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/model-registry.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/skills.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/package-manager.ts` | `03-coding-agent-layer.md` |
+| `packages/coding-agent/src/core/session-manager.ts` | `03-coding-agent-layer.md`, `08-compaction-and-sessions.md` |
+| `packages/coding-agent/src/core/tools/*.ts` | `06-tool-system-deep-dive.md` |
+| `packages/coding-agent/src/core/extensions/*.ts` | `07-extension-system-deep-dive.md` |
+| `packages/coding-agent/src/core/compaction/*.ts` | `08-compaction-and-sessions.md` |
+| `packages/coding-agent/src/modes/**/*.ts` | `03-coding-agent-layer.md` |
+
+## Update Criteria
+
+Only update docs when:
+- **API changes**: Function signatures, type definitions, or class structures changed
+- **Behavioral changes**: Logic flow, algorithm, or feature behavior changed
+- **New features**: New env vars, new options, new capabilities added
+- **Line number shifts**: Source code references (`> **源码**:` lines) have incorrect line numbers
+
+Skip updates when:
+- Only internal implementation details changed (no API/behavior impact)
+- Only tests, comments, or formatting changed
+- Only `models.generated.ts` or changelog files changed
