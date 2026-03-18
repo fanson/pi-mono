@@ -622,7 +622,7 @@ type AuthStorageData = Record<string, AuthCredential>
 
 ## Model Registry (src/core/model-registry.ts)
 
-> **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L240
+> **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L241
 
 管理内置模型和用户自定义模型/Provider。
 
