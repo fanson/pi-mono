@@ -405,7 +405,7 @@ findInitialModel()
 
 ## 扩展系统
 
-> **源码**: `packages/coding-agent/src/core/extensions/` — types.ts (ExtensionAPI L950), runner.ts (ExtensionRunner L199), loader.ts（详见 [07-extension-system-deep-dive.md](07-extension-system-deep-dive.md)）
+> **源码**: `packages/coding-agent/src/core/extensions/` — types.ts (ExtensionAPI L950), runner.ts (ExtensionRunner L199), loader.ts（详见 [06-extension-system-deep-dive.md](06-extension-system-deep-dive.md)）
 
 ### 加载路径
 
@@ -467,7 +467,7 @@ export default function (pi: ExtensionAPI) {
 
 ## 上下文压缩
 
-> **源码**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact L712, findCutPoint L379, generateSummary L523（详见 [08-compaction-and-sessions.md](08-compaction-and-sessions.md)）
+> **源码**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact L712, findCutPoint L379, generateSummary L523（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
 
 当对话超出模型的上下文窗口时：
 
@@ -489,7 +489,7 @@ export default function (pi: ExtensionAPI) {
 
 ## 会话管理
 
-> **源码**: `packages/coding-agent/src/core/session-manager.ts` — SessionManager L662, appendMessage L823, getBranch L1021, branch L1111（详见 [08-compaction-and-sessions.md](08-compaction-and-sessions.md)）
+> **源码**: `packages/coding-agent/src/core/session-manager.ts` — SessionManager L662, appendMessage L823, getBranch L1021, branch L1111（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
 
 会话以条目树（不是线性数组）存储：
 

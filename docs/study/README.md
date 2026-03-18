@@ -11,20 +11,20 @@
 | 02 | [agent-core 层](02-agent-core-layer.md) | 双循环、工具执行、Agent 类、消息扩展 |
 | 03 | [coding-agent 层](03-coding-agent-layer.md) | CLI、运行模式、AgentSession、工具、扩展、压缩、会话、配置、资源加载、Skills、包管理 |
 | 04 | [调用图和依赖关系](04-call-graph-and-dependencies.md) | 完整调用链、抽象边界、文件依赖 |
-| 05 | [设计模式与贡献指南](05-design-patterns-and-contribution-guide.md) | 设计模式、反模式、贡献清单 |
-| 06 | [工具系统深入](06-tool-system-deep-dive.md) | 7 个工具的完整执行流程、匹配算法、截断策略 |
-| 07 | [扩展系统深入](07-extension-system-deep-dive.md) | Extension API、事件系统、Runner、加载机制、真实示例 |
-| 08 | [压缩与会话管理](08-compaction-and-sessions.md) | 上下文压缩、Token 估算、会话树、分支、持久化 |
+| 05 | [工具系统深入](05-tool-system-deep-dive.md) | 7 个工具的完整执行流程、匹配算法、截断策略 |
+| 06 | [扩展系统深入](06-extension-system-deep-dive.md) | Extension API、事件系统、Runner、加载机制、真实示例 |
+| 07 | [压缩与会话管理](07-compaction-and-sessions.md) | 上下文压缩、Token 估算、会话树、分支、持久化 |
+| 08 | [设计模式与贡献指南](08-design-patterns-and-contribution-guide.md) | 设计模式、反模式、贡献清单 |
 | 09 | [测试与贡献工作流](09-testing-and-contribution.md) | 测试框架、运行方式、贡献流程、验证清单 |
-| 10 | [实战练习](10-hands-on-exercises.md) | 17 个动手练习 + 10 题综合测验，验证学习效果 |
+| 10 | [实战练习](10-hands-on-exercises.md) | 23 个动手练习 + 10 题综合测验，验证学习效果 |
 
 ## 建议阅读顺序
 
 1. 先读 **00-架构总览** 建立全局概念
 2. 按 **01 → 02 → 03** 逐层深入（ai → agent → coding-agent）
 3. 用 **04** 作为追踪代码路径的参考手册
-4. 读 **05** 了解设计模式和反模式
-5. 按 **06 → 07 → 08** 深入各子系统
+4. 按 **05 → 06 → 07** 深入各子系统
+5. 读 **08** 了解设计模式和反模式
 6. 读 **09** 了解测试和贡献工作流
 7. 最后完成 **10** 的实战练习验证理解
 

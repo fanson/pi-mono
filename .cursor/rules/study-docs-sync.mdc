@@ -42,10 +42,10 @@ When working on the `study/architecture-analysis` branch or editing files in `do
 | `packages/coding-agent/src/core/model-registry.ts` | `03-coding-agent-layer.md` |
 | `packages/coding-agent/src/core/skills.ts` | `03-coding-agent-layer.md` |
 | `packages/coding-agent/src/core/package-manager.ts` | `03-coding-agent-layer.md` |
-| `packages/coding-agent/src/core/session-manager.ts` | `03-coding-agent-layer.md`, `08-compaction-and-sessions.md` |
-| `packages/coding-agent/src/core/tools/*.ts` | `06-tool-system-deep-dive.md` |
-| `packages/coding-agent/src/core/extensions/*.ts` | `07-extension-system-deep-dive.md` |
-| `packages/coding-agent/src/core/compaction/*.ts` | `08-compaction-and-sessions.md` |
+| `packages/coding-agent/src/core/session-manager.ts` | `03-coding-agent-layer.md`, `07-compaction-and-sessions.md` |
+| `packages/coding-agent/src/core/tools/*.ts` | `05-tool-system-deep-dive.md` |
+| `packages/coding-agent/src/core/extensions/*.ts` | `06-extension-system-deep-dive.md` |
+| `packages/coding-agent/src/core/compaction/*.ts` | `07-compaction-and-sessions.md` |
 | `packages/coding-agent/src/modes/**/*.ts` | `03-coding-agent-layer.md` |
 
 ## Update Criteria
