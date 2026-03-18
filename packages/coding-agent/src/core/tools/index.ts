@@ -17,6 +17,7 @@ export {
 	type EditToolOptions,
 	editTool,
 } from "./edit.js";
+export { withFileLock } from "./file-lock.js";
 export {
 	createFindTool,
 	type FindOperations,
