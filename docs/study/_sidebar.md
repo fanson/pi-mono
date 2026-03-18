@@ -1,0 +1,20 @@
+- [首页](README.md)
+
+- **架构总览**
+  - [00 - 三层架构概览](00-architecture-overview.md)
+  - [04 - 调用图与依赖](04-call-graph-and-dependencies.md)
+  - [05 - 设计模式与贡献指南](05-design-patterns-and-contribution-guide.md)
+
+- **分层详解**
+  - [01 - pi-ai 层（LLM API）](01-pi-ai-layer.md)
+  - [02 - agent-core 层（循环引擎）](02-agent-core-layer.md)
+  - [03 - coding-agent 层（工具与会话）](03-coding-agent-layer.md)
+
+- **子系统深入**
+  - [06 - 工具系统深入分析](06-tool-system-deep-dive.md)
+  - [07 - 扩展系统深入分析](07-extension-system-deep-dive.md)
+  - [08 - 压缩与会话管理](08-compaction-and-sessions.md)
+
+- **实践**
+  - [09 - 测试架构与贡献流程](09-testing-and-contribution.md)
+  - [10 - 实战练习](10-hands-on-exercises.md)
