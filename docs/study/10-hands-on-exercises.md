@@ -464,3 +464,150 @@ export default function (pi: ExtensionAPI) {
 
 - Q: 旧条目 1-29 从 JSONL 文件中删除了吗？
 - A: 没有。JSONL 是 append-only 的。条目保留在文件中，只是在构建上下文时不再包含。这保证了会话文件的完整性（可以用于审计或回溯）。
+
+---
+
+## Phase 5 练习：CLI 入口、运行模式与基础设施
+
+### 练习 18: 追踪 main() 启动流程
+
+**目标**: 理解从 `pi "fix the bug"` 到 agent 开始工作的完整路径。
+
+> **源码对照**: `packages/coding-agent/src/main.ts` — main() L623
+
+**步骤**:
+1. 打开 `packages/coding-agent/src/main.ts`，找到 `main()` 函数
+2. 注意**两次参数解析**模式：
+   - 第一次 `parseArgs(args)` 获取 `--extension` 路径
+   - 加载资源后，第二次 `parseArgs(args, extensionFlags)` 识别扩展定义的 CLI 标志
+3. 跟踪到 `buildSessionOptions()` → `createAgentSession()` → 模式选择
+
+**验证问题**:
+- Q: 为什么需要两次参数解析？
+- A: 扩展可以注册自定义 CLI 标志（如 `--my-ext-debug`）。第一次解析获取扩展路径并加载扩展，扩展注册标志后，第二次解析才能识别这些标志。
+
+- Q: `pi -p "fix bug"` 和 `echo "fix bug" | pi` 走同一个模式吗？
+- A: 是。管道输入时强制进入 print 模式（检测到 stdin 非 TTY 时设置 print mode）。
+
+### 练习 19: 理解三种运行模式的差异
+
+**目标**: 理解 Interactive、Print、RPC 模式的选择逻辑和职责。
+
+**步骤**:
+1. 在 `main()` 末尾找到模式选择分支
+2. 分别打开三个入口：
+   - `src/modes/interactive/interactive-mode.ts` — InteractiveMode L144
+   - `src/modes/print-mode.ts` — runPrintMode L30
+   - `src/modes/rpc/rpc-mode.ts` — runRpcMode L45
+
+**验证问题**:
+- Q: 在 RPC 模式下，谁负责显示输出？
+- A: pi 本身不显示任何内容。所有 AgentEvent 作为 JSON Lines 写到 stdout，客户端（如 IDE 插件）负责 UI 渲染。
+
+- Q: Print 模式和 Interactive 模式在 session 持久化上有区别吗？
+- A: 没有核心区别。两者都使用 `SessionManager` 持久化。但 print 模式通常是单次执行，不进入交互循环。
+
+### 练习 20: 理解模型解析
+
+**目标**: 理解 `pi --provider anthropic --model sonnet` 如何解析为具体模型。
+
+> **源码对照**: `packages/coding-agent/src/core/model-resolver.ts` — resolveCliModel L328
+
+**步骤**:
+1. 打开 `src/core/model-resolver.ts`
+2. 跟踪 `resolveCliModel()` 的搜索流程:
+   - `parseModelPattern("sonnet")` → 无 provider 前缀
+   - `findExactModelReferenceMatch()` → 精确匹配
+   - `resolveModelScope()` → 模糊搜索所有 provider
+
+**验证问题**:
+- Q: `pi --model "anthropic:claude-sonnet-4:high"` 中的 `:high` 被谁消费？
+- A: `parseModelPattern()` 解析为 `{ provider: "anthropic", modelId: "claude-sonnet-4", thinkingLevel: "high" }`。thinkingLevel 传递给 agent-core 的 streamOptions。
+
+- Q: 如果没有指定任何模型，默认用什么？
+- A: `findInitialModel()` 从 `defaultModelPerProvider` 中按顺序查找第一个有 API key 的 provider 的默认模型。
+
+### 练习 21: 写一个 Skill（模拟贡献）
+
+**目标**: 理解 skill 的发现、验证和调用机制。
+
+> **源码对照**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L147
+
+**场景**: 创建一个 `code-review` skill。
+
+**步骤**:
+1. 创建目录结构：
+   ```
+   .pi/skills/code-review/
+   └── SKILL.md
+   ```
+
+2. 编写 SKILL.md：
+   ```markdown
+   ---
+   name: code-review
+   description: Guides the agent through a structured code review process
+   ---
+
+   # Code Review Skill
+
+   When reviewing code, follow this process:
+   1. Read the changed files
+   2. Check for common issues...
+   ```
+
+**验证问题**:
+- Q: 如果目录名是 `code_review` 但 frontmatter 中 `name: code-review`，会怎样？
+- A: 验证失败。名称必须等于父目录名。
+
+- Q: `disable-model-invocation: true` 会有什么效果？
+- A: skill 描述不出现在系统提示词中，模型无法自动发现和使用它。只能通过 `/skill:code-review` 命令手动调用。
+
+- Q: Skill 被模型调用时，实际发生了什么？
+- A: 模型看到 skill 描述后，使用 `read` 工具读取 SKILL.md 的完整内容。Skill 本身不是代码，是指导模型行为的知识文档。
+
+### 练习 22: Settings 优先级
+
+**目标**: 理解全局和项目级配置的合并行为。
+
+> **源码对照**: `packages/coding-agent/src/core/settings-manager.ts` — deepMergeSettings L100
+
+**场景**:
+```json
+// ~/.pi/agent/settings.json (全局)
+{
+  "defaultProvider": "anthropic",
+  "compaction": { "keepRecentTokens": 20000, "reserveTokens": 16000 }
+}
+
+// {cwd}/.pi/settings.json (项目)
+{
+  "compaction": { "keepRecentTokens": 40000 }
+}
+```
+
+**验证问题**:
+- Q: 合并后 `compaction.reserveTokens` 的值是什么？
+- A: 16000。`deepMergeSettings` 递归合并嵌套对象。项目级只覆盖了 `keepRecentTokens`，`reserveTokens` 保留全局值。
+
+- Q: 如果项目级设置 `"defaultProvider": "openai"`，最终 provider 是什么？
+- A: `"openai"`。项目级覆盖全局级。原始值 `"anthropic"` 被替换。
+
+- Q: Settings 的读写为什么用 `proper-lockfile`？
+- A: 因为多个 pi 实例可能同时运行在同一目录，需要跨进程的文件锁防止并发写入损坏 JSON。
+
+### 练习 23: Prompt Cache 的 Provider 差异
+
+**目标**: 理解不同 Provider 实现 prompt cache 的方式差异。
+
+> **源码对照**: `packages/ai/src/providers/anthropic.ts` — getCacheControl L49
+
+**验证问题**:
+- Q: Anthropic 和 OpenAI 的缓存机制有什么根本区别？
+- A: Anthropic 使用 `cache_control` 标记特定消息块作为缓存断点。OpenAI 使用 `prompt_cache_key`（session 级别）让相同前缀的消息自动缓存。Anthropic 更精细（块级），OpenAI 更粗放（session 级）。
+
+- Q: `CacheRetention` 的 `"short"` 和 `"long"` 有什么区别？
+- A: 取决于 Provider。Anthropic 中 short 使用 `ephemeral`（约 5 分钟），long 使用 `persistent`（付费持久化）。Bedrock 中 long 使用 `TTL: ONE_HOUR`。
+
+- Q: 用户如何通过环境变量启用持久缓存？
+- A: 设置 `PI_CACHE_RETENTION=long`。所有 Provider 的 `resolveCacheRetention()` 都会检查这个环境变量。
