@@ -301,6 +301,9 @@ blocks.push({
 })
 ```
 
+Bedrock 仅对识别出的 Claude 模型启用缓存。对于 Application Inference Profile（ARN 中不含模型名），
+可设置环境变量 `AWS_BEDROCK_FORCE_CACHE=1` 强制启用 cache point 注入。
+
 ### 解析优先级
 
 每个 Provider 内部都有相同的 `resolveCacheRetention()` 函数：
