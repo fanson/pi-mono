@@ -12,8 +12,11 @@
 | `src/types.ts` | 所有类型定义：Message、Tool、Context、Model、Events |
 | `src/stream.ts` | `streamSimple()`、`complete()` — 公共入口 |
 | `src/utils/event-stream.ts` | `EventStream<T, R>` — 推送式异步迭代器 |
+| `src/utils/overflow.ts` | 上下文溢出检测（多 Provider 错误模式匹配） |
+| `src/utils/validation.ts` | 工具参数 AJV 验证（含运行时降级） |
 | `src/api-registry.ts` | Provider 注册表 |
 | `src/providers/register-builtins.ts` | 所有内置 Provider 的懒注册 |
+| `src/providers/faux.ts` | **Faux Provider** — 可编程的模拟 Provider（测试/演示） |
 | `src/models.ts` | 模型注册表：`getModel()`、`getModels()` |
 | `src/env-api-keys.ts` | `getEnvApiKey()` — 凭证检测 |
 
@@ -386,6 +389,105 @@ for await (const event of stream) {
 
 通过第三方代理或兼容 API 时，`"long"` 会回退为 `"short"` 行为。
 这是因为第三方可能不支持 `ttl` 或 `prompt_cache_retention` 参数。
+
+## Faux Provider (src/providers/faux.ts)
+
+Faux 是一个进程内的可编程模拟 Provider，用于确定性测试和演示。
+它不是 `KnownApi` 枚举成员，而是通过 `registerApiProvider()` 动态注册。
+
+### 注册
+
+```typescript
+import { registerFauxProvider } from "@mariozechner/pi-ai"
+
+const faux = registerFauxProvider({
+  api: "my-test-api",           // 自定义 API 标识符
+  provider: "my-test-provider", // 自定义 Provider 名称
+  models: [{ id: "test-model", name: "Test", contextWindow: 128000, maxTokens: 4096 }],
+  tokensPerSecond: 100,         // 可选：模拟流式输出速度
+  tokenSize: { min: 1, max: 5 } // 可选：每个 chunk 的字符数范围
+})
+```
+
+### 返回对象
+
+```typescript
+faux.api           // 注册的 API 标识符
+faux.models        // 注册的模型列表
+faux.getModel(id)  // 查找模型
+faux.state         // { callCount } — 调用统计
+faux.setResponses(responses)     // 设置排队的响应
+faux.appendResponses(responses)  // 追加响应
+faux.getPendingResponseCount()   // 剩余未消费的响应数
+faux.unregister()                // 注销 Provider
+```
+
+### 响应类型
+
+每个响应可以是静态 `AssistantMessage` 或异步工厂函数：
+
+```typescript
+faux.setResponses([
+  fauxAssistantMessage([fauxText("Hello")]),
+  async (context, options, state, model) => {
+    return fauxAssistantMessage([fauxText(`Call #${state.callCount}`)])
+  }
+])
+```
+
+每次 `stream()` 调用按 FIFO 出队一个响应，模拟完整的流式协议
+（`start`, `text_*`, `thinking_*`, `toolcall_*`, `done`/`error`）。
+
+### 使用量模拟
+
+`withUsageEstimate` 提供粗略的 token 计数。结合 `sessionId` + `cacheRetention !== "none"` 时，
+还可模拟基于前缀的 prompt cache（cache read/write 分割）。
+
+## Provider 行为变更（近期版本）
+
+### Thinking 禁用支持
+
+多个 Provider 现在支持显式禁用推理模型的 thinking：
+
+| Provider | 禁用方式 |
+|----------|---------|
+| **Anthropic** | 发送 `thinking: { type: "disabled" }` |
+| **Google / Vertex / Gemini CLI** | Gemini 2.x: `thinkingBudget: 0`；Gemini 3: 使用最低 `thinkingLevel`（无法完全禁用） |
+| **OpenAI / Azure Responses** | `reasoning: { effort: "none" }`（Copilot 例外：完全省略 `reasoning` 字段避免 400 错误） |
+
+### 缓存 Token 计费修正
+
+**Google / Vertex**: `input` token 现在会减去 `cachedContentTokenCount`，
+避免缓存命中的 token 被双重计入计费输入。
+
+### Bedrock requestMetadata
+
+`BedrockOptions` 新增 `requestMetadata?: Record<string, string>`，
+转发到 Converse API 用于 AWS 成本分配标签。
+
+### OpenAI Completions 健壮性
+
+- 忽略 null chunk（`if (!chunk || typeof chunk !== "object") continue`）
+- `choice.usage` 回退（兼容 Moonshot/Kimi 等非标准实现）
+- `network_error` finish reason 映射为 `stopReason: "error"`
+
+### 工具调用 ID 规范化
+
+OpenAI Responses 共享层：外部 `function_call` ID 被哈希为 `fc_<hash>` 格式，
+确保 ID 以 `fc_` 开头且不超过长度限制（用于会话重放）。
+
+## 溢出检测与参数验证
+
+### 溢出检测 (src/utils/overflow.ts)
+
+`OVERFLOW_PATTERNS` 收集各 Provider 的上下文溢出错误模式。
+新增 **Ollama** 模式：`prompt too long; exceeded (?:max )?context length`。
+
+### 参数验证 (src/utils/validation.ts)
+
+`validateToolArguments` 使用 AJV 验证工具参数。
+新增降级逻辑：当运行时不支持 `new Function`（如 CSP 限制、Cloudflare Workers），
+跳过验证并返回原始参数，而非抛出异常。
 
 ## 模型注册表 (src/models.ts)
 

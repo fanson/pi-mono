@@ -19,9 +19,32 @@ coding-agent 提供 7 个工具，分为三组：
 
 | 函数 | 返回类型 | 包含工具 |
 |------|----------|----------|
-| `createCodingTools(cwd)` | `Tool[]` | read, bash, edit, write |
-| `createReadOnlyTools(cwd)` | `Tool[]` | read, grep, find, ls |
-| `createAllTools(cwd)` | `Record<ToolName, Tool>` | 全部 7 个 |
+| `createCodingToolDefinitions(cwd)` | `ToolDefinition[]` | read, bash, edit, write |
+| `createReadOnlyToolDefinitions(cwd)` | `ToolDefinition[]` | read, grep, find, ls |
+| `createAllToolDefinitions(cwd)` | `Record<ToolName, ToolDefinition>` | 全部 7 个 |
+| `createCodingTools(cwd)` | `AgentTool[]` | read, bash, edit, write |
+| `createReadOnlyTools(cwd)` | `AgentTool[]` | read, grep, find, ls |
+| `createAllTools(cwd)` | `Record<ToolName, AgentTool>` | 全部 7 个 |
+
+### Definition-first 架构
+
+每个工具现在有两层 API：
+
+```
+ToolDefinition（底层）:
+  - prompt 元数据（name, description, parameters schema）
+  - execute(toolCallId, params, signal, onUpdate, ctx: ExtensionContext)
+  - 可选: renderCall, renderResult（TUI 渲染）
+  - 可选: prepareArguments(rawArgs) — 在 schema 验证前规范化参数
+
+AgentTool（运行时层）:
+  - 通过 wrapToolDefinition(definition, ctxFactory?) 包装
+  - ctxFactory 注入 ExtensionContext（来自 ExtensionRunner.createContext()）
+```
+
+`wrapToolDefinition` 在 `tool-definition-wrapper.ts` 中实现。
+扩展注册的工具通过 `wrapRegisteredTool(registeredTool, runner)` 包装，
+自动注入 runner 的上下文工厂。
 
 ## 共享基础设施
 
@@ -71,6 +94,37 @@ resolveReadPath(path, cwd):
 | find | `truncateHead`（仅字节限制） |
 | ls | `truncateHead`（仅字节限制） |
 
+### 共享渲染辅助 (render-utils.ts)
+
+> **源码对照**: `packages/coding-agent/src/core/tools/render-utils.ts`
+
+所有工具共享的 UI 辅助函数：
+
+```
+shortenPath(path)         — 用 ~ 缩短 home 目录前缀
+str(value)                — 类型安全的字符串转换（检测非字符串参数）
+replaceTabs(text)         — Tab → 空格（UI 渲染用）
+normalizeDisplayText(text) — 规范化显示文本
+getTextOutput(result, options) — 从 ToolResult 提取文本输出
+  - 如果有图片且终端不支持显示: 返回 imageFallback + 尺寸信息
+  - 使用 sanitizeBinaryOutput + stripAnsi 清理二进制和 ANSI 转义
+invalidArgText()          — 样式化的 "[invalid arg]" 文本
+```
+
+### 文件变更队列 (file-mutation-queue.ts)
+
+> **源码对照**: `packages/coding-agent/src/core/tools/file-mutation-queue.ts`
+
+```
+withFileMutationQueue<T>(filePath, fn):
+  - 用 realpathSync.native 归一化路径（失败则 resolve 回退）
+  - 按规范路径维护 Promise 链
+  - 同一文件的写操作串行化
+  - 不同文件的操作完全并行
+
+由 edit 和 write 工具使用，解决并行工具执行时的 TOCTOU 竞态。
+```
+
 ### 外部工具管理
 
 ```
@@ -86,28 +140,38 @@ grep 和 find 依赖外部二进制，通过 `ensureTool` 自动管理。
 
 > **源码对照**: `packages/coding-agent/src/core/tools/edit.ts`, 匹配算法在 `edit-diff.ts` fuzzyFindText L79
 
+### Schema 和参数预处理
+
+```typescript
+schema: {
+  path: string,
+  edits: [{ oldText: string, newText: string }]  // 多处编辑（v0.63.0+）
+}
+```
+
+**向后兼容**: `prepareArguments`（`prepareEditArguments`）将旧的顶层
+`{ path, oldText, newText }` 格式自动转换为 `{ path, edits: [{ oldText, newText }] }`。
+
 ### 执行流程
 
 ```
-execute({ path, oldText, newText }, signal):
-  1. resolveToCwd(path, cwd) → absolutePath
-  2. 检查 signal.aborted（提前退出）
-  3. 注册 abort 监听器
-  4. ops.access(absolutePath)  — 文件不存在则 reject
-  5. ops.readFile(absolutePath) → Buffer
-  6. buffer.toString("utf-8") → rawContent
-  7. stripBom(rawContent) → { bom, text }
-  8. detectLineEnding(text) → "\r\n" | "\n"
-  9. normalizeToLF(text), normalizeToLF(oldText), normalizeToLF(newText)
-  10. fuzzyFindText(normalizedContent, normalizedOldText) → 匹配结果
-  11. 如果未找到 → reject
-  12. 检查唯一性（多个匹配 → reject）
-  13. 执行替换: prefix + newText + suffix
-  14. no-op 检查（内容不变 → reject）
-  15. 恢复 BOM + 行尾格式
-  16. ops.writeFile(absolutePath, finalContent)
-  17. generateDiffString(oldContent, newContent) → diff
-  18. resolve({ content: ["Successfully replaced..."], details: { diff } })
+execute({ path, edits }, signal):
+  1. 验证至少有一个编辑
+  2. resolveToCwd(path, cwd) → absolutePath
+  3. withFileMutationQueue(absolutePath, async () => {
+       4. ops.readFile(absolutePath) → Buffer
+       5. stripBom → { bom, text }
+       6. detectLineEnding → "\r\n" | "\n"
+       7. normalizeToLF(text)
+       8. applyEditsToNormalizedContent(normalizedContent, edits)
+          - 对每个 edit: fuzzyFindText → 唯一性检查 → 标记位置
+          - 检查编辑之间无重叠
+          - 按反序应用所有替换
+       9. restoreLineEndings + BOM
+       10. ops.writeFile(absolutePath, finalContent)
+       11. generateDiffString(oldContent, newContent) → diff
+       12. resolve({ content: ["Successfully replaced..."], details: { diff } })
+     })
 ```
 
 ### 匹配策略：精确 → 模糊
@@ -334,9 +398,11 @@ interface ReadOperations {
 ```
 execute({ path, content }, signal):
   1. resolveToCwd(path, cwd) → absolutePath
-  2. ops.mkdir(dirname(absolutePath))  — 创建父目录
-  3. ops.writeFile(absolutePath, content)
-  4. resolve({ content: ["Successfully wrote ${bytes} bytes to ${path}"] })
+  2. withFileMutationQueue(absolutePath, async () => {
+       3. ops.mkdir(dirname(absolutePath))  — 创建父目录
+       4. ops.writeFile(absolutePath, content)
+     })
+  5. resolve({ content: ["Successfully wrote ${bytes} bytes to ${path}"] })
 ```
 
 ### WriteOperations 接口
@@ -348,7 +414,7 @@ interface WriteOperations {
 }
 ```
 
-**注意**: write 无截断、无锁、无 abort 检查。它是最简单的工具。
+**注意**: write 通过 `withFileMutationQueue` 与 edit 共享文件级串行化。
 
 ---
 
@@ -459,3 +525,11 @@ execute({ path, limit }):
 3. 通过 `options?.operations` 允许覆盖
 
 这样工具逻辑和 I/O 完全分离，支持远程执行和单元测试。
+
+## 新增基础设施模块
+
+| 模块 | 职责 |
+|------|------|
+| `file-mutation-queue.ts` | 按规范文件路径串行化写操作，edit/write 共享 |
+| `render-utils.ts` | 共享 UI 渲染辅助（路径缩短、文本输出、图片占位） |
+| `tool-definition-wrapper.ts` | `wrapToolDefinition` — ToolDefinition → AgentTool 转换，注入 ExtensionContext |

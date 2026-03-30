@@ -20,7 +20,9 @@
 | `src/core/messages.ts` | 自定义消息类型 + `convertToLlm()` |
 | `src/core/system-prompt.ts` | 系统提示词构建 |
 | `src/core/tools/` | 7 个工具：edit, bash, read, write, grep, find, ls |
-| `src/core/tools/file-lock.ts` | 并行安全的文件锁（PR #2327，尚未合并到 main） |
+| `src/core/tools/file-mutation-queue.ts` | `withFileMutationQueue` — 按文件路径串行化文件写操作 |
+| `src/core/tools/render-utils.ts` | 共享 UI 渲染辅助（路径缩短、文本输出、图片占位） |
+| `src/core/tools/tool-definition-wrapper.ts` | `wrapToolDefinition` — ToolDefinition → AgentTool 转换 |
 | `src/core/extensions/` | 扩展加载、类型、运行器 |
 | `src/core/compaction/` | 上下文窗口管理 |
 | `src/core/session-manager.ts` | 会话持久化 |
@@ -28,8 +30,10 @@
 | `src/core/resource-loader.ts` | 统一加载扩展、skills、prompts、themes |
 | `src/core/auth-storage.ts` | API key 和 OAuth 存储 |
 | `src/core/model-registry.ts` | Provider 注册和自定义模型 |
-| `src/core/skills.ts` | Skill 发现、验证、加载 |
-| `src/core/package-manager.ts` | 包安装/卸载/更新 |
+| `src/core/skills.ts` | Skill 发现、验证、加载（含 SourceInfo） |
+| `src/core/package-manager.ts` | 包安装/卸载/更新（含 PathMetadata） |
+| `src/core/source-info.ts` | **SourceInfo** — 资源来源追踪（用户/项目/包/临时） |
+| `src/core/output-guard.ts` | **stdout 接管** — RPC/print 模式下重定向 stdout → stderr |
 
 ## CLI 入口 (src/main.ts)
 
@@ -189,7 +193,11 @@ AgentSession 把所有组件连接在一起：
 ```
 createAgentSession(options)                  ← sdk.ts
   1. 创建基础设施: SessionManager, SettingsManager, ModelRegistry, AuthStorage
-  2. 创建 Agent（配置 convertToLlm, transformContext, getApiKey）
+  2. 创建 Agent:
+     - convertToLlm: 含 blockImages 过滤（settings.getBlockImages() 时剥离图片内容）
+     - transformContext: 委托给 extension "context" 钩子
+     - getApiKey: 委托给 modelRegistry.getApiKeyAndHeaders
+     - onPayload: 触发 extension "before_provider_request" 钩子
   3. 恢复会话（或初始化新会话）
   4. 创建 AgentSession（Agent 作为参数传入，不是由 AgentSession 创建）
      → _buildRuntime()
@@ -263,15 +271,20 @@ declare module "@mariozechner/pi-agent-core" {
 
 ```typescript
 createCodingTools(cwd) 返回:
-  - read(path, offset?, limit?)    — 读取文件内容
-  - bash(command, timeout?)        — 执行 shell 命令
-  - edit(path, oldText, newText)   — 精确文本替换
-  - write(path, content)           — 创建/覆写文件
+  - read(path, offset?, limit?)           — 读取文件内容（含图片）
+  - bash(command, timeout?)               — 执行 shell 命令
+  - edit(path, edits[{oldText, newText}]) — 精确文本替换（支持多处编辑）
+  - write(path, content)                  — 创建/覆写文件
 
 createAllTools(cwd) 额外包含:
   - grep(pattern, path?, limit?, context?)  — 搜索文件内容
   - find(pattern, path?)                     — 按 glob 查找文件
   - ls(path?)                                — 列出目录内容
+
+工具架构现在采用 **Definition-first** 模式：
+  - `create*ToolDefinition(cwd)` → 返回 `ToolDefinition`（含 prompt 元数据 + execute + 可选 render）
+  - `create*Tool(cwd)` → 通过 `wrapToolDefinition()` 包装为 `AgentTool`
+  - `ToolDefinition.execute` 签名: `(toolCallId, params, signal, onUpdate, ctx: ExtensionContext)`
 ```
 
 ### 可插拔操作模式
@@ -305,31 +318,58 @@ createEditTool(cwd, { operations: remoteEditOps })
 BashOperations、WriteOperations、ReadOperations、GrepOperations、FindOperations、LsOperations
 都遵循相同的模式。
 
-### 文件锁 (withFileLock) — 待合并
+### 文件变更队列 (withFileMutationQueue)
 
-> **注意**: 以下内容属于 PR #2327 的修复方案，尚未合并到 main。
-> 当前 main 分支的 `edit` 和 `write` 工具**没有**并发保护。
-> 这意味着并行执行多个 edit 操作同一文件时，存在 TOCTOU 竞态条件。
+> **源码**: `packages/coding-agent/src/core/tools/file-mutation-queue.ts`
 
-我们为 #2327 设计的修复方案（`file-lock.ts`）：
+`edit` 和 `write` 工具的文件写入操作通过 `withFileMutationQueue` 串行化，
+解决了并行工具执行时的 TOCTOU 竞态条件。
 
 ```
-withFileLock(absolutePath, fn):
-  1. 用 resolve() 归一化路径
-  2. 获取或创建该路径的 Promise 锁链
-  3. 等待当前锁持有者释放
+withFileMutationQueue(absolutePath, fn):
+  1. realpathSync.native(absolutePath) 归一化路径（失败则 resolve 回退）
+  2. 获取或创建该规范路径的 Promise 链
+  3. 链式等待前一个操作完成
   4. 执行 fn()
-  5. 释放锁（即使出错也释放，通过 finally）
+  5. 完成后释放（即使出错也释放）
 
 特性:
-  - 同一文件 → 串行化（FIFO 顺序）
+  - 同一文件（规范路径）→ 串行化（FIFO 顺序）
   - 不同文件 → 完全并行
-  - 错误释放锁（finally 块）
   - Promise 链模式（无 mutex/semaphore）
 ```
 
-**当前状态**（main 分支）: `edit.ts` 直接调用 `ops.readFile` → 替换 → `ops.writeFile`，
-无任何锁保护。`write.ts` 同样直接调用 `ops.writeFile`。
+## 资源来源追踪 (src/core/source-info.ts)
+
+所有可加载资源（扩展、工具、命令、skills、prompts、themes）现在携带 `SourceInfo`：
+
+```typescript
+interface SourceInfo {
+  scope: SourceScope    // "user" | "project"
+  origin: SourceOrigin  // "local" | "package" | "temporary"
+  baseDir: string       // 资源所在的基础目录
+}
+```
+
+`createSourceInfo(pathMetadata)` 从 `PackageManager` 的 `PathMetadata` 构建。
+`createSyntheticSourceInfo(scope, origin, baseDir)` 用于测试和 SDK。
+
+这使得 UI 和日志能够显示每个资源的来源（本地/包/临时 CLI 路径），
+帮助用户理解哪些扩展和配置来自哪里。
+
+## Stdout 保护 (src/core/output-guard.ts)
+
+RPC 模式和 print 模式需要 stdout 用于结构化输出（JSON Lines）。
+`output-guard.ts` 提供 `takeOverStdout()` 将 `process.stdout.write` 重定向到 stderr，
+防止扩展或依赖库意外写入 stdout 污染输出。
+
+```typescript
+takeOverStdout()     // 替换 process.stdout.write → stderr
+restoreStdout()      // 恢复原始行为
+isStdoutTakenOver()  // 检查当前状态
+writeRawStdout(data) // 绕过保护直接写入 stdout
+flushRawStdout()     // 刷新 stdout 缓冲
+```
 
 ## 模型解析 (src/core/model-resolver.ts)
 
@@ -376,7 +416,16 @@ findInitialModel()
 系统提示词按以下顺序组装：
 
 ```
-1. 工具部分
+BuildSystemPromptOptions:
+  customPrompt       — 自定义提示词（替换默认）
+  selectedTools      — 当前活跃工具列表
+  toolSnippets       — 工具代码片段（有此参数时才在提示词中列出工具）
+  promptGuidelines   — 额外指南文本
+  appendSystemPrompt — 追加到系统提示词末尾
+  cwd, contextFiles, skills
+
+组装顺序:
+1. 工具部分（仅当 toolSnippets 提供时）
    "Available tools:"
    - 各工具的描述和代码片段
 
@@ -538,10 +587,14 @@ interface Settings {
   skills?: string[]             // skill 路径
   prompts?: string[]            // prompt 模板路径
   themes?: string[]             // 主题路径
+  enabledModels?: ScopedModel[] // 模型范围限制
+  sessionDir?: string           // 自定义会话存储目录
   compaction?: CompactionSettings  // 压缩参数
   retry?: RetrySettings         // 自动重试
   terminal?: TerminalSettings   // 终端行为
-  images?: ImageSettings        // 图片处理
+  images?: { blockImages?: boolean }  // 图片处理（blockImages 阻止图片发给 LLM）
+  thinkingBudgets?: ThinkingBudgets   // 每个 thinking level 的 token 预算
+  markdown?: MarkdownSettings   // Markdown 渲染设置
   // ...
 }
 ```
@@ -551,9 +604,27 @@ interface Settings {
 嵌套对象递归合并（项目级覆盖对应键），数组和原始值整体替换。
 `undefined` 值不覆盖已有值。
 
+### 迁移
+
+自动迁移旧配置格式：
+- `queueMode` → `steeringMode`
+- `websockets` → `transport`
+
+### 环境变量回退
+
+部分设置有环境变量回退：
+- `PI_CLEAR_ON_SHRINK` — 终端缩小时清屏
+- `PI_HARDWARE_CURSOR` — 硬件光标模式
+
+### drainErrors()
+
+收集并返回 Settings 初始化/解析时遇到的非致命错误，
+允许调用方在 UI 就绪后统一报告。
+
 ### 文件锁
 
 读写使用 `proper-lockfile` 加锁，防止多个 pi 实例并发修改。
+`flush()` 用于将内存中的 async 写入队列持久化。
 
 ## Resource Loading (src/core/resource-loader.ts)
 
@@ -562,32 +633,38 @@ interface Settings {
 统一管理所有可加载资源的生命周期：
 
 ```
-ResourceLoader.reload()
+DefaultResourceLoader.reload()
   1. packageManager.resolve()     ← 从 settings 解析包路径
-  2. resolveExtensionSources()    ← 解析 CLI 指定的扩展
+  2. resolveExtensionSources()    ← 解析 CLI 指定的扩展（标记为 temporary）
   3. 合并路径: 包 + CLI + settings 中的额外路径
-  4. loadExtensions()             ← 加载扩展（jiti）
-  5. updateSkillsFromPaths()      ← 加载 skills
-  6. updatePromptsFromPaths()     ← 加载 prompt 模板
-  7. updateThemesFromPaths()      ← 加载主题
-  8. loadProjectContextFiles()    ← 发现 AGENTS.md / CLAUDE.md
+  4. loadExtensions()             ← 加载扩展（jiti），附加 sourceInfo
+  5. updateSkillsFromPaths()      ← 加载 skills，附加 sourceInfo
+  6. updatePromptsFromPaths()     ← 加载 prompt 模板，附加 sourceInfo
+  7. updateThemesFromPaths()      ← 加载主题，附加 sourceInfo
+  8. getAgentsFiles()             ← 发现 AGENTS.md / CLAUDE.md（agent 目录 + 祖先目录遍历）
   9. 解析系统提示词覆盖
+  10. 冲突检测: 重复工具名 / 重复标志
 ```
 
 ### 资源类型
 
-| 资源 | 文件类型 | 来源 |
-|---|---|---|
-| 扩展 | `.ts`, `.js` | 本地、npm、git |
-| Skills | `.md` (含 frontmatter) | 本地、包 |
-| Prompt 模板 | `.md` | 本地、包 |
-| 主题 | `.json` | 本地、包 |
-| 上下文文件 | `AGENTS.md`, `CLAUDE.md` | 项目目录层级 |
+| 资源 | 文件类型 | 来源 | 附加信息 |
+|---|---|---|---|
+| 扩展 | `.ts`, `.js` | 本地、npm、git | sourceInfo |
+| Skills | `.md` (含 frontmatter) | 本地、包 | sourceInfo |
+| Prompt 模板 | `.md` | 本地、包 | sourceInfo |
+| 主题 | `.json` | 本地、包 | sourceInfo |
+| 上下文文件 | `AGENTS.md`, `CLAUDE.md` | agent 目录 + 祖先遍历 | — |
 
 ### 资源发现事件
 
 加载完成后，`resources_discover` 事件允许扩展动态修改资源列表
-（通过 `extendResources()`）。
+（通过 `extendResources()`，新路径也会附加 sourceInfo 和来源元数据）。
+
+### Prompt 模板
+
+`PromptTemplate` 现在携带 `sourceInfo`，支持参数替换：
+`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}` — 类似 shell 的位置参数语法。
 
 ## Auth Storage (src/core/auth-storage.ts)
 
@@ -613,18 +690,45 @@ type AuthStorageData = Record<string, AuthCredential>
 // 键 = provider ID (如 "anthropic", "openai")
 ```
 
+### 运行时 API Key
+
+```typescript
+authStorage.setRuntimeApiKey(provider, key)    // CLI --api-key 设置
+authStorage.removeRuntimeApiKey(provider)
+authStorage.setFallbackResolver(resolver)       // 自定义 Provider 的回退解析
+```
+
+API key 优先级：**runtime > file > env > fallback**
+
+### OAuth Token 刷新
+
+`refreshOAuthTokenWithLock` 使用 `withLockAsync` 确保多个并发请求
+不会同时刷新 token。
+
 ### 并发安全
 
 使用 `proper-lockfile` 文件锁。读写通过 `withLock(fn)` 序列化：
 获取锁 → 读取 JSON → 调用 fn(current) → 写入 → 释放锁。
 
 提供 `FileAuthStorageBackend`（生产）和 `InMemoryAuthStorageBackend`（测试）。
+`hasAuth(provider)` 检查包括 runtime、file、env 和 fallback 四个来源。
+`drainErrors()` 收集并返回初始化时遇到的非致命错误。
 
 ## Model Registry (src/core/model-registry.ts)
 
 > **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L241
 
 管理内置模型和用户自定义模型/Provider。
+
+### 核心功能
+
+- **`refresh()`**: 重置所有 API/OAuth 注册，重新加载配置
+- **`registerProvider(name, config)`** / **`unregisterProvider(name)`**: 运行时注册/注销 Provider
+- **`getApiKeyAndHeaders(provider, model)`**: 统一获取认证信息
+- **`clearApiKeyCache()`**: 清除缓存的 API key
+
+`ProviderConfigInput` 支持自定义 `streamSimple` 函数和 OAuth 配置，
+OAuth Provider 可通过 `modifyModels` 回调修改模型列表。
 
 ### 自定义模型配置
 
@@ -671,15 +775,15 @@ type AuthStorageData = Record<string, AuthCredential>
 
 > **源码**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L147, loadSkills L379
 
-Skills 是给模型提供专业知识的 Markdown 文件。
+Skills 是给模型提供专业知识的 Markdown 文件。每个 Skill 现在携带 `sourceInfo`。
 
 ### 发现规则
 
 ```
 skill 搜索路径:
-  ~/.pi/agent/skills/     ← 全局
-  .pi/skills/             ← 项目级
-  包中的 skills/          ← 通过 package manager
+  ~/.pi/agent/skills/     ← 全局（scope: "user"）
+  .pi/skills/             ← 项目级（scope: "project"）
+  包中的 skills/          ← 通过 package manager（origin: "package"）
 
 发现逻辑:
   目录含 SKILL.md → 整个目录是一个 skill（不再递归）
@@ -720,6 +824,23 @@ disable-model-invocation: false
 > **源码**: `packages/coding-agent/src/core/package-manager.ts` — DefaultPackageManager L658
 
 管理扩展、skills、prompts、themes 的安装和更新。
+
+### PathMetadata
+
+包管理器为每个解析的路径提供 `PathMetadata`，用于构建 `SourceInfo`:
+
+```typescript
+interface PathMetadata {
+  source: string        // 包源标识（如 "npm:@scope/pkg"）
+  scope: SourceScope    // "user" | "project"
+  origin: SourceOrigin  // "local" | "package" | "temporary"
+  baseDir: string       // 包安装目录
+}
+```
+
+### 离线模式
+
+`PI_OFFLINE=1` 跳过所有网络操作（`isOfflineModeEnabled()`）。
 
 ### 命令
 
