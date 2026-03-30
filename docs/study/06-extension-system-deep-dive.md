@@ -44,7 +44,8 @@ pi.registerTool({
   label: string,            // 显示标签
   description: string,      // LLM 看到的描述
   parameters: TSchema,      // TypeBox schema
-  execute: (id, args) => Promise<AgentToolResult>,
+  prepareArguments?: (rawArgs) => args,  // schema 验证前的参数预处理
+  execute: (id, args, signal, onUpdate, ctx) => Promise<AgentToolResult>,
   renderCall?: (args) => TuiNode,      // TUI 渲染
   renderResult?: (result) => TuiNode,  // TUI 渲染
 })
@@ -113,6 +114,10 @@ pi.registerProvider("name", config)   // 注册/覆盖模型提供商
 pi.unregisterProvider("name")         // 移除提供商
 ```
 
+**生命周期**: 在 `bindCore()` 之前调用时，注册会排入 `pendingProviderRegistrations` 队列。
+`bindCore()` 冲刷队列并替换 `registerProvider` / `unregisterProvider` 为立即生效的实现。
+这意味着扩展工厂函数中的 `registerProvider` 调用会被延迟到 runner 绑定时执行。
+
 ### 扩展间通信
 
 ```typescript
@@ -146,11 +151,15 @@ Agent 事件:
 
 输入事件:
   input               — 用户输入前（可拦截或变换）
+                        InputEvent 含 source: "interactive" | "rpc" | "extension"
   user_bash           — !command 执行前
 
 工具事件:
   tool_call           — 工具调用前（可阻止）
   tool_result         — 工具结果后（可修改）
+
+模型事件:
+  model_select        — 模型选择时
 
 上下文事件:
   context             — LLM 调用前（可修改消息）
@@ -212,13 +221,17 @@ errorListeners: Set<ErrorListener>   // 错误监听器
 1. loadExtensions()
    → 对每个扩展文件: jiti.import() → factory(api)
    → 注册处理器和工具到 Extension 对象
+   → registerProvider 调用排入 runtime.pendingProviderRegistrations 队列
 
-2. ExtensionRunner.bindCore(actions)
+2. ExtensionRunner.bindCore(actions, contextActions, providerActions?)
    → 把 sendMessage/setModel/etc 绑定到 runtime
-   → 冲刷 pendingProviderRegistrations
+   → 绑定 getModel/isIdle/getSignal/abort/hasPendingMessages/shutdown 等上下文 action
+   → 冲刷 pendingProviderRegistrations（通过 providerActions 或 modelRegistry.registerProvider）
+   → 替换 runtime.registerProvider/unregisterProvider 为立即生效版本
 
-3. ExtensionRunner.bindCommandContext(actions)
+3. ExtensionRunner.bindCommandContext(actions?)
    → 绑定 waitForIdle/newSession/fork 等
+   → 如果不提供 actions，命令操作变为 no-op
 
 4. ExtensionRunner.setUIContext(uiContext)
    → 绑定 UI 操作（select/confirm/notify/custom）
@@ -240,17 +253,28 @@ errorListeners: Set<ErrorListener>   // 错误监听器
 
 ### 上下文对象
 
-每次事件派发时创建 `ExtensionContext`:
+每次事件派发时创建 `ExtensionContext`（通过 `runner.createContext()`）:
 
 ```typescript
 interface ExtensionContext {
   ui: UIContext             // select, confirm, notify, custom
+  hasUI: boolean            // 是否有 UI（RPC/print 模式下为 false）
   cwd: string               // 当前工作目录
-  sessionManager: SessionManager
+  sessionManager: ReadonlySessionManager
   modelRegistry: ModelRegistry
-  // + 绑定的 action 函数
+  model: Model              // 当前模型
+  signal: AbortSignal | undefined  // 当前 turn 的 abort 信号
+  isIdle: () => boolean     // agent 是否空闲
+  abort: () => void         // 中止当前操作
+  hasPendingMessages: () => boolean
+  shutdown: () => void      // 关闭会话
+  getContextUsage: () => ContextUsage
+  compact: () => void       // 触发压缩
+  getSystemPrompt: () => string
 }
 ```
+
+**注意**: `signal` 在 `createContext()` 调用时快照，不是每次属性访问时重新获取。
 
 命令处理器获得扩展的 `ExtensionCommandContext`:
 
@@ -452,9 +476,31 @@ CLI 启动
 | 扩展间通信 | `pi.events.emit/on` | 多扩展协作 |
 | 延迟配置 | `pi.on("session_start")` + `pi.getFlag()` | 在标志可用后配置 |
 
+### InputSource 和 Input 事件
+
+`input` 事件现在携带 `source` 字段标识输入来源：
+
+```typescript
+type InputSource = "interactive" | "rpc" | "extension"
+
+interface InputEvent {
+  type: "input"
+  text: string
+  images?: ImageContent[]
+  source: InputSource  // 标识输入从哪里来
+}
+```
+
+`emitInput` 链式处理所有扩展：
+- `transform` → 修改 text/images，传递给下一个处理器
+- `handled` → 短路返回，不再调用后续处理器
+- `continue` → 不修改，继续传递
+
 ### 注意事项
 
 1. **工厂函数是同步初始化**：可以在 `on` 回调中做异步操作，但工厂本身应快速返回
 2. **`tool_call` 异常会传播**：不像其他事件被 try/catch 包裹
 3. **扩展间顺序**：加载顺序决定事件处理顺序（项目级 → 全局级 → 配置级）
 4. **不要修改 agent-core**：所有定制通过扩展 API 实现
+5. **signal 快照**：`ExtensionContext.signal` 在 `createContext()` 时快照，不会动态更新
+6. **Provider 注册时序**：工厂函数中的 `registerProvider` 是延迟的，`bindCore` 后才生效

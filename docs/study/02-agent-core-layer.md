@@ -10,9 +10,9 @@
 
 | 文件 | 作用 |
 |------|------|
-| `src/types.ts` | AgentMessage、AgentTool、AgentEvent、AgentLoopConfig |
-| `src/agent-loop.ts` | 主循环：runLoop、工具执行、流式传输 |
-| `src/agent.ts` | Agent 类：状态管理、队列、公共 API |
+| `src/types.ts` | AgentMessage、AgentTool、AgentEvent、AgentLoopConfig、BeforeToolCallContext/AfterToolCallContext |
+| `src/agent-loop.ts` | 主循环：runLoop、工具执行（含 prepareArguments）、流式传输 |
+| `src/agent.ts` | Agent 类：状态管理、队列、公共 API、signal 暴露 |
 | `src/proxy.ts` | 代理流：通过服务器代理 LLM 请求（用于 web-ui 等场景） |
 
 ## 这一层在 pi-ai 基础上增加了什么？
@@ -20,7 +20,7 @@
 | pi-ai | agent-core |
 |-------|------------|
 | `Message`（user/assistant/toolResult） | `AgentMessage` = Message + 自定义类型 |
-| `Tool`（name、description、parameters） | `AgentTool` = Tool + execute() + label |
+| `Tool`（name、description、parameters） | `AgentTool` = Tool + execute() + label + prepareArguments?() |
 | `Context`（systemPrompt、messages、tools） | `AgentContext`（同上但用 AgentMessage/AgentTool） |
 | `streamSimple()` 返回 stream | Agent 循环消费 stream 并继续执行 |
 
@@ -170,11 +170,18 @@ runLoop():
 
 ## 工具执行 (src/agent-loop.ts)
 
-### 三个阶段
+### 四个阶段
 
 ```
+阶段 0: PREPARE ARGUMENTS（参数预处理） — v0.64.0 新增
+  - 如果工具定义了 prepareArguments(rawArgs)
+  - 在 schema 验证之前运行
+  - 返回新的 args 替换原始参数
+  - 用途：向后兼容旧的参数格式（如 edit 工具的单参数→多参数迁移）
+
 阶段 1: PREPARE（准备）
   - 按名称查找工具（找不到 → 错误结果）
+  - 运行 prepareArguments（如果定义了）
   - 用 TypeBox schema 验证参数
   - 调用 beforeToolCall 钩子
     → { block: true } 阻止执行
@@ -279,7 +286,20 @@ agent.continue()
 agent.abort()           // 中止当前操作
 agent.waitForIdle()     // 等待不再 streaming 的 Promise
 agent.reset()           // 清空所有状态
+
+// 信号 — v0.63.2 新增
+agent.signal            // 当前 turn 的 AbortSignal（用于嵌套异步操作）
 ```
+
+## AgentMessage 扩展（声明合并）
+
+> **源码对照**: `packages/agent/src/types.ts` — AgentMessage L245, AgentTool L273, AgentLoopConfig L96, AgentEvent L295
+
+### Steering 时序保证
+
+Steering 消息在**当前 assistant 消息的完整工具批次**全部完成后才被消费（v0.58.4 修复）。
+即使 steering 消息在工具执行中途到达，也会等到本批次所有工具 finalize 完成后
+才注入到下一次 LLM 调用。
 
 ## AgentMessage 扩展（声明合并）
 
