@@ -23,8 +23,8 @@
   各自基于相同的原始内容做替换，后写入的覆盖先写入的，导致编辑丢失。
   这就是 TOCTOU（Time-of-Check-to-Time-of-Use）竞态条件。
 
-- Q: PR #2327 的 `withFileLock` 如何解决这个问题？
-- A: 在 execute 阶段，同一文件的操作通过 Promise 链串行化（FIFO），
+- Q: `withFileMutationQueue` 如何解决这个问题？
+- A: 在 execute 阶段，同一文件（规范路径）的操作通过 Promise 链串行化（FIFO），
   不同文件仍然完全并行。
 
 **动手**: 阅读 `packages/coding-agent/src/core/tools/edit.ts` 的 `execute` 方法，
@@ -232,7 +232,7 @@
 3. prepare: 串行；execute: 并发；finalize: 串行（按源顺序）
 4. 没有消费者: 加入 `queue` 缓存；有消费者等待: 从 `waiting` 数组取出 resolver 直接 unblock
 5. 生成一个错误内容的 `ToolResultMessage`，跳过 `executePreparedToolCall`，直接走 `emitToolCallOutcome`
-6. edit 的 execute 做 read→modify→write 三步操作，并行模式下多个 edit 同时读取同一文件的旧内容，各自替换后写入，后写的覆盖先写的（TOCTOU）。PR #2327 用 `withFileLock`（Promise 链）串行化同一文件的操作
+6. edit 的 execute 做 read→modify→write 三步操作，并行模式下多个 edit 同时读取同一文件的旧内容，各自替换后写入，后写的覆盖先写的（TOCTOU）。`withFileMutationQueue`（Promise 链）按规范文件路径串行化同一文件的写操作
 7. 在当前 turn 的所有工具调用完成后，`turn_end` 之后，通过 `getSteeringMessages()` 获取并注入到下一个 turn 开始
 8. 因为 `streamSimple()` 的调用者期望同步收到一个 stream 对象。如果 provider throw，调用者无法获得 stream。错误必须通过 stream 事件传播，这样消费者才能统一处理
 9. 不需要。通过 TypeScript 声明合并 (`declare module`)，在 coding-agent 或任何其他包中扩展 `CustomAgentMessages` 接口即可

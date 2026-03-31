@@ -56,14 +56,14 @@ queue 在消费者较慢时缓冲事件。
 **为什么？** 20+ 个 provider，全部启动时加载太慢太浪费。
 某些 provider（Bedrock）依赖 Node-only 模块会破坏浏览器构建。
 
-### 6. Promise 链锁（PR #2327 提出，尚未合并）
+### 6. 文件变更队列（`withFileMutationQueue`）
 
-**位置**: coding-agent 的 `file-lock.ts`（待合并）
+**位置**: coding-agent 的 `file-mutation-queue.ts`
 
-**模式**: 一个 `Map<path, Promise>` 的链式结构。每个新操作链接到前一个的 Promise。
-不需要 mutex 或 semaphore。
+**模式**: 一个 `Map<normalizedPath, Promise>` 的链式结构。每个新操作链接到前一个的 Promise。
+不需要 mutex 或 semaphore。路径通过 `realpathSync.native` 归一化（失败则 `resolve` 回退）。
 
-**当前状态**: main 分支的 edit/write 工具没有并发保护，存在 TOCTOU 竞态条件。
+**当前状态**: edit 和 write 工具都通过 `withFileMutationQueue` 保护。
 
 **为什么用 Promise 链而非 Mutex**:
 - 更简单（无 lock/unlock 状态管理）

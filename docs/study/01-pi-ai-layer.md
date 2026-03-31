@@ -22,7 +22,7 @@
 
 ## 核心类型 (src/types.ts)
 
-> **源码对照**: `packages/ai/src/types.ts` — Message L213, Usage L167-178, Model L314, CacheRetention L56, AssistantMessageEvent L237
+> **源码对照**: `packages/ai/src/types.ts` — Message L213, Usage L167-180, Model L314, CacheRetention L56, AssistantMessageEvent L237
 
 ### 消息类型
 
@@ -44,8 +44,10 @@ interface AssistantMessage {
   api: Api              // 哪个 API 生成的
   provider: Provider    // 哪个提供商
   model: string         // 模型 ID
+  responseId?: string   // Provider 特定的响应/消息标识符
   usage: Usage          // token 用量和费用
   stopReason: StopReason // "stop" | "length" | "toolUse" | "error" | "aborted"
+  errorMessage?: string // 错误时的详细信息
   timestamp: number
 }
 
@@ -55,6 +57,7 @@ interface ToolResultMessage<TDetails = any> {
   toolCallId: string
   toolName: string
   content: (TextContent | ImageContent)[]
+  details?: TDetails      // 工具实现特定的结构化细节
   isError: boolean
   timestamp: number
 }
@@ -164,8 +167,10 @@ push(event) 被调用时:
 > **源码对照**: `packages/ai/src/stream.ts` — streamSimple L43
 
 ```typescript
-export function streamSimple(model, context, options?) {
-  const provider = getApiProvider(model.api)  // 从注册表查找
+export function streamSimple<TApi extends Api>(
+  model: Model<TApi>, context: Context, options?: SimpleStreamOptions
+): AssistantMessageEventStream {
+  const provider = resolveApiProvider(model.api)  // 从注册表查找（不存在则抛异常）
   return provider.streamSimple(model, context, options)
 }
 ```
@@ -311,7 +316,7 @@ Bedrock 仅对识别出的 Claude 模型启用缓存。对于 Application Infere
 
 每个 Provider 内部都有相同的 `resolveCacheRetention()` 函数：
 
-> **源码对照**: `packages/ai/src/providers/anthropic.ts` — resolveCacheRetention L39, getCacheControl L49, buildParams L607, convertMessages L697
+> **源码对照**: `packages/ai/src/providers/anthropic.ts` — resolveCacheRetention L39, getCacheControl L49, buildParams L607, convertMessages L702
 
 ```typescript
 function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
@@ -447,11 +452,11 @@ faux.setResponses([
 
 ### Thinking 禁用支持
 
-多个 Provider 现在支持显式禁用推理模型的 thinking：
+多个 Provider 现在支持显式禁用推理模型的 thinking（仅对 `model.reasoning === true` 且 `thinkingEnabled === false` 时生效）：
 
 | Provider | 禁用方式 |
 |----------|---------|
-| **Anthropic** | 发送 `thinking: { type: "disabled" }` |
+| **Anthropic** | 发送 `thinking: { type: "disabled" }`（仅 reasoning 模型 + `thinkingEnabled: false`） |
 | **Google / Vertex / Gemini CLI** | Gemini 2.x: `thinkingBudget: 0`；Gemini 3: 使用最低 `thinkingLevel`（无法完全禁用） |
 | **OpenAI / Azure Responses** | `reasoning: { effort: "none" }`（Copilot 例外：完全省略 `reasoning` 字段避免 400 错误） |
 
@@ -486,8 +491,9 @@ OpenAI Responses 共享层：外部 `function_call` ID 被哈希为 `fc_<hash>` 
 ### 参数验证 (src/utils/validation.ts)
 
 `validateToolArguments` 使用 AJV 验证工具参数。
-新增降级逻辑：当运行时不支持 `new Function`（如 CSP 限制、Cloudflare Workers），
-跳过验证并返回原始参数，而非抛出异常。
+降级逻辑：当运行时不支持 `new Function`（如浏览器扩展的 CSP 限制），
+跳过验证并返回原始参数，而非抛出异常。通过 `canUseRuntimeCodegen()` 检测：
+浏览器扩展（`chrome?.runtime?.id` 存在）或 `new Function` 抛异常时均返回 false。
 
 ## 模型注册表 (src/models.ts)
 
