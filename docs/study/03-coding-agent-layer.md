@@ -267,7 +267,7 @@ declare module "@mariozechner/pi-agent-core" {
 
 ### 默认工具集
 
-> **源码**: `packages/coding-agent/src/core/tools/index.ts` — createCodingTools L111, createAllTools L130
+> **源码**: `packages/coding-agent/src/core/tools/index.ts` — createCodingToolDefinitions L140, createCodingTools L170, createAllTools L183
 
 ```typescript
 createCodingTools(cwd) 返回:
@@ -344,17 +344,23 @@ withFileMutationQueue(absolutePath, fn):
 所有可加载资源（扩展、工具、命令、skills、prompts、themes）现在携带 `SourceInfo`：
 
 ```typescript
+type SourceScope = "user" | "project" | "temporary"
+type SourceOrigin = "package" | "top-level"
+
 interface SourceInfo {
-  scope: SourceScope    // "user" | "project"
-  origin: SourceOrigin  // "local" | "package" | "temporary"
-  baseDir: string       // 资源所在的基础目录
+  path: string          // 资源文件路径
+  source: string        // 包源标识（如 "npm:@scope/pkg"）
+  scope: SourceScope    // 作用域
+  origin: SourceOrigin  // 来源类型
+  baseDir?: string      // 资源所在的基础目录（可选）
 }
 ```
 
-`createSourceInfo(pathMetadata)` 从 `PackageManager` 的 `PathMetadata` 构建。
-`createSyntheticSourceInfo(scope, origin, baseDir)` 用于测试和 SDK。
+`createSourceInfo(path, metadata)` 从路径和 `PackageManager` 的 `PathMetadata` 构建。
+`createSyntheticSourceInfo(path, { source, scope?, origin?, baseDir? })` 用于测试和 SDK
+（默认 scope = `"temporary"`, origin = `"top-level"`）。
 
-这使得 UI 和日志能够显示每个资源的来源（本地/包/临时 CLI 路径），
+这使得 UI 和日志能够显示每个资源的来源（包/顶层），
 帮助用户理解哪些扩展和配置来自哪里。
 
 ## Stdout 保护 (src/core/output-guard.ts)
@@ -832,9 +838,9 @@ disable-model-invocation: false
 ```typescript
 interface PathMetadata {
   source: string        // 包源标识（如 "npm:@scope/pkg"）
-  scope: SourceScope    // "user" | "project"
-  origin: SourceOrigin  // "local" | "package" | "temporary"
-  baseDir: string       // 包安装目录
+  scope: SourceScope    // "user" | "project" | "temporary"
+  origin: "package" | "top-level"  // 来源类型
+  baseDir?: string      // 包安装目录（可选）
 }
 ```
 
