@@ -13,3 +13,4 @@
   - [09 - 测试架构与贡献流程](09-testing-and-contribution.md)
   - [10 - 实战练习](10-hands-on-exercises.md)
   - [11 - Compaction 对比: Claude Code vs Pi](11-compaction-comparison.md)
+  - [12 - 扩展功能对比: Claude Code vs Pi](12-extended-feature-comparison.md)
