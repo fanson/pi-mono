@@ -102,10 +102,13 @@ pi.setActiveTools(toolNames)  // 设置活跃工具集
 ### 模型和思考级别
 
 ```typescript
-pi.setModel(model)           // 切换模型
+pi.setModel(model)           // 切换模型 (通过 ExtensionAPI 方法)
 pi.getThinkingLevel()        // 获取思考级别
 pi.setThinkingLevel(level)   // 设置思考级别
 ```
+
+注意：Extension API 中的 `setModel`/`setThinkingLevel` 是 AgentSession 提供的封装方法，
+内部更新 `agent.state.model` / `agent.state.thinkingLevel`（v0.66+ 直接属性赋值 API）。
 
 ### Provider 注册
 
@@ -135,10 +138,10 @@ pi.events.on("channel", (data) => {}) // 订阅事件
   session_directory   — 自定义会话目录
 
 会话事件:
-  session_start       — 会话启动后
+  session_start       — 会话启动/加载/重载后 (含 reason: startup|reload|new|resume|fork)
   session_shutdown    — 会话关闭前
-  session_before_switch / session_switch
-  session_before_fork / session_fork
+  session_before_switch — 切换会话前 (可取消)
+  session_before_fork   — fork 会话前 (可取消)
   session_before_compact / session_compact
   session_before_tree / session_tree
 
@@ -224,7 +227,7 @@ errorListeners: Set<ErrorListener>   // 错误监听器
    → registerProvider 调用排入 runtime.pendingProviderRegistrations 队列
 
 2. ExtensionRunner.bindCore(actions, contextActions, providerActions?)
-   → 把 sendMessage/setModel/etc 绑定到 runtime
+   → 把 sendMessage/setModel/etc 绑定到 runtime (内部通过 agent.state.model 赋值)
    → 绑定 getModel/isIdle/getSignal/abort/hasPendingMessages/shutdown 等上下文 action
    → 冲刷 pendingProviderRegistrations（通过 providerActions 或 modelRegistry.registerProvider）
    → 替换 runtime.registerProvider/unregisterProvider 为立即生效版本
@@ -405,9 +408,10 @@ export default function (pi: ExtensionAPI) {
     }
   }
   
+  // session_start 的 reason 覆盖了 startup/reload/new/resume/fork
+  // 不再需要单独监听 session_fork — 统一到 session_start
   pi.on("session_start", restoreFromBranch)
   pi.on("session_tree", restoreFromBranch)
-  pi.on("session_fork", restoreFromBranch)
 }
 ```
 

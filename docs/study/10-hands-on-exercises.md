@@ -370,11 +370,11 @@ export default function (pi: ExtensionAPI) {
 
 **步骤**:
 1. 阅读 `examples/extensions/tools.ts` 的实现
-2. 理解它如何在 `session_start`、`session_tree`、`session_fork` 时恢复状态
+2. 理解它如何在 `session_start`（含 reason: startup/reload/new/resume/fork）和 `session_tree` 时恢复状态
 
 **验证问题**:
-- Q: 为什么需要在 `session_tree` 和 `session_fork` 时也恢复状态？
-- A: 因为 session 支持分支。切换到不同分支或 fork 后，需要从该分支的历史中恢复扩展配置，而不是使用上一个分支的配置。
+- Q: 为什么 `session_start` 需要 `reason` 字段？v0.66+ 移除了 `session_switch` 和 `session_fork` 事件后如何区分场景？
+- A: `session_start.reason` 统一了所有会话开始场景（startup/reload/new/resume/fork）。扩展通过检查 `reason` 和 `previousSessionFile` 来决定恢复行为，不再需要监听多个独立事件。
 
 - Q: `appendEntry` 创建的条目在 `convertToLlm` 时会怎样？
 - A: 自定义条目不是 `AgentMessage`，它们只存储在 `SessionManager` 中，不参与 LLM 上下文。
