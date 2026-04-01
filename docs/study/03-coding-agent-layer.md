@@ -40,7 +40,7 @@
 
 `main()` 是 pi 命令的入口函数。
 
-> **源码**: `packages/coding-agent/src/main.ts` — main() L623
+> **源码**: `packages/coding-agent/src/main.ts` — main() L663
 
 启动流程：
 
@@ -91,7 +91,7 @@ main(args)
 
 ### Interactive 模式（默认）
 
-> **源码**: `packages/coding-agent/src/modes/interactive/interactive-mode.ts` — InteractiveMode L144
+> **源码**: `packages/coding-agent/src/modes/interactive/interactive-mode.ts` — InteractiveMode L147
 
 `InteractiveMode` 基于 `@mariozechner/pi-tui` 提供完整的终端 UI：
 
@@ -123,7 +123,7 @@ session 切换、主题、扩展 UI 组件。
 
 ### Print 模式（单次执行）
 
-> **源码**: `packages/coding-agent/src/modes/print-mode.ts` — runPrintMode L30
+> **源码**: `packages/coding-agent/src/modes/print-mode.ts` — runPrintMode L31
 
 `pi -p "fix the bug"` 或管道输入时使用。
 
@@ -140,7 +140,7 @@ runPrintMode(session, options):
 
 ### RPC 模式
 
-> **源码**: `packages/coding-agent/src/modes/rpc/rpc-mode.ts` — runRpcMode L45
+> **源码**: `packages/coding-agent/src/modes/rpc/rpc-mode.ts` — runRpcMode L46
 
 `pi --mode rpc` 启动无头模式，通过 JSON Lines 在 stdin/stdout 上通信。
 
@@ -189,7 +189,7 @@ AgentSession 把所有组件连接在一起：
 
 ### 构建流程
 
-> **源码**: `packages/coding-agent/src/core/sdk.ts` — createAgentSession L165
+> **源码**: `packages/coding-agent/src/core/sdk.ts` — createAgentSession L174
 
 ```
 createAgentSession(options)                  ← sdk.ts
@@ -214,7 +214,7 @@ AgentSession 本身不负责 Agent 的构建。
 
 ### 钩子桥接
 
-> **源码**: `packages/coding-agent/src/core/agent-session.ts` — AgentSession L212, steer L1076, _buildRuntime L295
+> **源码**: `packages/coding-agent/src/core/agent-session.ts` — AgentSession L232, steer L1138, _buildRuntime L318
 
 AgentSession 把 agent-core 的钩子桥接到扩展系统：
 
@@ -422,7 +422,7 @@ findInitialModel()
 
 ## 系统提示词构建
 
-> **源码**: `packages/coding-agent/src/core/system-prompt.ts` — buildSystemPrompt L39
+> **源码**: `packages/coding-agent/src/core/system-prompt.ts` — buildSystemPrompt L28
 
 系统提示词按以下顺序组装：
 
@@ -465,7 +465,7 @@ BuildSystemPromptOptions:
 
 ## 扩展系统
 
-> **源码**: `packages/coding-agent/src/core/extensions/` — types.ts (ExtensionAPI L950), runner.ts (ExtensionRunner L199), loader.ts（详见 [06-extension-system-deep-dive.md](06-extension-system-deep-dive.md)）
+> **源码**: `packages/coding-agent/src/core/extensions/` — types.ts (ExtensionAPI L988), runner.ts (ExtensionRunner L202), loader.ts（详见 [06-extension-system-deep-dive.md](06-extension-system-deep-dive.md)）
 
 ### 加载路径
 
@@ -527,7 +527,7 @@ export default function (pi: ExtensionAPI) {
 
 ## 上下文压缩
 
-> **源码**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact L712, findCutPoint L379, generateSummary L523（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
+> **源码**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact L715, findCutPoint L386, generateSummary L530（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
 
 当对话超出模型的上下文窗口时：
 
@@ -549,7 +549,7 @@ export default function (pi: ExtensionAPI) {
 
 ## 会话管理
 
-> **源码**: `packages/coding-agent/src/core/session-manager.ts` — SessionManager L662, appendMessage L823, getBranch L1021, branch L1111（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
+> **源码**: `packages/coding-agent/src/core/session-manager.ts` — SessionManager L664, appendMessage L829, getBranch L1029, branch L1120（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
 
 会话以条目树（不是线性数组）存储：
 
@@ -575,7 +575,7 @@ SessionEntry = {
 
 ## Settings 管理 (src/core/settings-manager.ts)
 
-> **源码**: `packages/coding-agent/src/core/settings-manager.ts` — Settings L63, deepMergeSettings L100, SettingsManager L225
+> **源码**: `packages/coding-agent/src/core/settings-manager.ts` — Settings L63, deepMergeSettings L101, SettingsManager L226
 
 配置系统使用全局 + 项目两级覆盖：
 
@@ -727,7 +727,7 @@ API key 优先级：**runtime > file > env > fallback**
 
 ## Model Registry (src/core/model-registry.ts)
 
-> **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L241
+> **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L255
 
 管理内置模型和用户自定义模型/Provider。
 
@@ -784,7 +784,7 @@ OAuth Provider 可通过 `modifyModels` 回调修改模型列表。
 
 ## Skills 系统 (src/core/skills.ts)
 
-> **源码**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L147, loadSkills L379
+> **源码**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L172, loadSkills L404
 
 Skills 是给模型提供专业知识的 Markdown 文件。每个 Skill 现在携带 `sourceInfo`。
 
@@ -832,7 +832,7 @@ disable-model-invocation: false
 
 ## Package Manager (src/core/package-manager.ts)
 
-> **源码**: `packages/coding-agent/src/core/package-manager.ts` — DefaultPackageManager L658
+> **源码**: `packages/coding-agent/src/core/package-manager.ts` — DefaultPackageManager L681
 
 管理扩展、skills、prompts、themes 的安装和更新。
 
