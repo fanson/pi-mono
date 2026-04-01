@@ -242,14 +242,29 @@ interface AgentState {
   systemPrompt: string
   model: Model<any>
   thinkingLevel: ThinkingLevel  // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
-  tools: AgentTool<any>[]
-  messages: AgentMessage[]       // 完整对话历史
-  isStreaming: boolean           // 是否正在运行
-  streamMessage: AgentMessage | null  // 当前流式传输中的消息
-  pendingToolCalls: Set<string>  // 正在执行的工具 ID
-  error?: string
+  set tools(tools: AgentTool<any>[])  // 赋值时拷贝顶层数组
+  get tools(): AgentTool<any>[]
+  set messages(messages: AgentMessage[])  // 赋值时拷贝顶层数组
+  get messages(): AgentMessage[]
+  readonly isStreaming: boolean           // 包含等待 agent_end listener settle
+  readonly streamingMessage?: AgentMessage  // 当前流式传输中的消息
+  readonly pendingToolCalls: ReadonlySet<string>  // 正在执行的工具 ID
+  readonly errorMessage?: string
 }
 ```
+
+状态管理通过直接属性赋值：
+```typescript
+agent.state.systemPrompt = "New prompt"
+agent.state.model = getModel("openai", "gpt-4o")
+agent.state.thinkingLevel = "medium"
+agent.state.tools = [myTool]           // 拷贝数组后存储
+agent.state.messages = newMessages     // 拷贝数组后存储
+agent.state.messages.push(message)     // 直接修改当前数组
+agent.reset()                          // 清空所有状态
+```
+
+注意：`tools` 和 `messages` 的 setter 会**拷贝顶层数组**再存储。但通过 getter 返回的数组是可变引用——直接 `push()` 会修改当前状态。
 
 ### 消息队列
 
@@ -352,3 +367,7 @@ type AgentEvent =
 
 事件通过 `emit: AgentEventSink = (event) => Promise<void> | void` 发射。
 Agent 类在 `_processLoopEvent` 中处理它们更新状态，然后转发给订阅者。
+
+`Agent.subscribe()` 的 listener 按注册顺序被 await。`agent_end` 表示不会再发射
+更多循环事件，但 `agent.waitForIdle()` 和 `agent.prompt()` 只在所有被 await 的
+`agent_end` listener 完成后才 settle。

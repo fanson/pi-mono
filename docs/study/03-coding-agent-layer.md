@@ -17,6 +17,7 @@
 | `src/modes/print-mode.ts` | 单次执行模式：`pi -p "prompt"` |
 | `src/core/sdk.ts` | `createAgentSession()` — 编程式入口 |
 | `src/core/agent-session.ts` | 会话编排器：钩子、事件、持久化 |
+| `src/core/agent-session-runtime.ts` | **AgentSessionRuntimeHost** — 管理 session 切换 (/new, /resume, /fork) |
 | `src/core/messages.ts` | 自定义消息类型 + `convertToLlm()` |
 | `src/core/system-prompt.ts` | 系统提示词构建 |
 | `src/core/tools/` | 7 个工具：edit, bash, read, write, grep, find, ls |
@@ -218,8 +219,8 @@ AgentSession 本身不负责 Agent 的构建。
 AgentSession 把 agent-core 的钩子桥接到扩展系统：
 
 ```typescript
-// AgentSession 构造函数中:
-this.agent.setBeforeToolCall(async ({ toolCall, args }) => {
+// AgentSession 构造时通过 AgentOptions 传入:
+beforeToolCall: async ({ toolCall, args }) => {
   // 等待所有待处理的 agent 事件被处理完
   await this._agentEventQueue
   // 让扩展检查/阻止工具调用
@@ -229,8 +230,12 @@ this.agent.setBeforeToolCall(async ({ toolCall, args }) => {
     toolCallId: toolCall.id,
     input: args
   })
-})
+}
 ```
+
+注意：v0.66+ 中 `beforeToolCall` 和 `afterToolCall` 不再通过 setter 方法设置
+（旧 API: `agent.setBeforeToolCall()`），而是通过 `AgentOptions` 构造参数传入，
+或直接赋值 `agent.beforeToolCall = ...`。
 
 `_agentEventQueue` 确保 `SessionManager` 已经持久化了 assistant 消息，
 然后再让扩展的 `tool_call` 处理器看到上下文。防止扩展看到不一致的状态。
