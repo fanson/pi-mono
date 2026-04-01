@@ -138,7 +138,7 @@ grep 和 find 依赖外部二进制，通过 `ensureTool` 自动管理。
 
 ## edit 工具深入分析
 
-> **源码对照**: `packages/coding-agent/src/core/tools/edit.ts`, 匹配算法在 `edit-diff.ts` fuzzyFindText L79
+> **源码对照**: `packages/coding-agent/src/core/tools/edit.ts`, 匹配算法在 `edit-diff.ts` fuzzyFindText L96
 
 ### Schema 和参数预处理
 

@@ -26,7 +26,7 @@ export default function (pi: ExtensionAPI) {
 
 ## Extension API 完整接口
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — ExtensionAPI L950, ExtensionEvent L819
+> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — ExtensionAPI L988, ExtensionEvent L851
 
 ### 事件订阅
 
@@ -207,7 +207,7 @@ input:
 
 ## ExtensionRunner 内部实现
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/runner.ts` — ExtensionRunner L199, emitToolCall L655, emitToolResult L605
+> **源码对照**: `packages/coding-agent/src/core/extensions/runner.ts` — ExtensionRunner L202, emitToolCall L662, emitToolResult L612
 
 ### 核心数据
 
@@ -294,7 +294,7 @@ interface ExtensionCommandContext extends ExtensionContext {
 
 ## 扩展加载
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/loader.ts` — loadExtensions L361, loadExtension L317, loadExtensionModule L287
+> **源码对照**: `packages/coding-agent/src/core/extensions/loader.ts` — loadExtensions L373, loadExtension L329, loadExtensionModule L292
 
 ### 发现路径
 
