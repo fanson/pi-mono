@@ -233,7 +233,7 @@ Pi 的 hook 系统分两层:
 
 | 建议 | 适合 Pi 的方式 | 难度 |
 |------|-------------|------|
-| 阻塞错误 | 扩展 `beforeToolCall` 返回值支持 `{ block: true, reason: string }` | 低 |
+| 阻塞错误 | `prepareToolCall`（`packages/agent/src/agent-loop.ts`）已支持：`beforeToolCall` 可返回 `{ block: true, reason?: string }`，将跳过执行并注入错误工具结果 | — |
 | HTTP hook 传输 | 不建议 — Pi 的进程内扩展已经足够灵活 | — |
 | 后台异步 hook | 扩展事件已支持 async, 但无后台队列 — 可按需添加 | 中 |
 

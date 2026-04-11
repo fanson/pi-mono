@@ -366,7 +366,7 @@ type AgentEvent =
 ```
 
 事件通过 `emit: AgentEventSink = (event) => Promise<void> | void` 发射。
-Agent 类在 `_processLoopEvent` 中处理它们更新状态，然后转发给订阅者。
+Agent 类在 `processEvents` 中处理它们更新状态，然后转发给订阅者。
 
 `Agent.subscribe()` 的 listener 按注册顺序被 await。`agent_end` 表示不会再发射
 更多循环事件，但 `agent.waitForIdle()` 和 `agent.prompt()` 只在所有被 await 的

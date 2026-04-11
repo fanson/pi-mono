@@ -10,21 +10,19 @@
 **步骤**:
 1. 打开 `packages/agent/src/agent-loop.ts`，找到 `executeToolCallsParallel()` 函数
 2. 跟踪这个调用链:
-   - LLM 返回了 `{ type: "toolCall", name: "edit", arguments: { path, oldText, newText } }`
+   - LLM 返回了 `{ type: "toolCall", name: "edit", arguments: { path, edits: [{ oldText, newText }, ...] } }`
    - `prepareToolCall()` 做了什么？（找到工具、验证参数、运行 beforeToolCall 钩子）
    - `executePreparedToolCall()` 调用的是哪个函数？
 3. 跳到 `packages/coding-agent/src/core/tools/edit.ts`，从 `execute` 方法开始读
-4. 注意：当前 `edit.ts` 的 `execute` 方法直接调用 `ops.readFile` → 替换 → `ops.writeFile`，
-   没有并发保护。这就是 #2327 竞态条件 bug 的根源。
+4. 注意：`execute` 在 `withFileMutationQueue` 内对**同一规范路径**做 read→替换→write；**不同文件**仍可并行。
 
 **验证问题**:
-- Q: 如果 LLM 同时返回 3 个 edit 调用（同一文件），当前（main）会发生什么？
-- A: 准备阶段按顺序（A→B→C），执行阶段并发启动——三个 edit 同时读取文件，
-  各自基于相同的原始内容做替换，后写入的覆盖先写入的，导致编辑丢失。
-  这就是 TOCTOU（Time-of-Check-to-Time-of-Use）竞态条件。
+- Q: 如果 LLM 同时返回 3 个 edit 调用（同一文件），未加队列时会发生什么？
+- A: 准备阶段按顺序（A→B→C），执行阶段若并发启动——多个 edit 可能同时读取文件，
+  各自基于相同的原始内容做替换，后写入的覆盖先写入的，导致编辑丢失（TOCTOU）。
 
 - Q: `withFileMutationQueue` 如何解决这个问题？
-- A: 在 execute 阶段，同一文件（规范路径）的操作通过 Promise 链串行化（FIFO），
+- A: 在 execute 阶段，同一文件（规范路径）的写路径通过 Promise 链**串行化**（FIFO），
   不同文件仍然完全并行。
 
 **动手**: 阅读 `packages/coding-agent/src/core/tools/edit.ts` 的 `execute` 方法，
@@ -64,7 +62,7 @@
 3. 跟踪:
    - `getSteeringMessages()` 在哪里被调用？（内层循环末尾，每个 turn 之后）
    - `getFollowUpMessages()` 在哪里被调用？（外层循环末尾，agent 本来要停止时）
-4. 打开 `packages/agent/src/agent.ts`，看 `dequeueSteeringMessages()` 的 `one-at-a-time` 模式
+4. 打开 `packages/agent/src/agent.ts`，看 `createLoopConfig()` 里注入的 `getSteeringMessages`：它返回 `this.steeringQueue.drain()`；在 `one-at-a-time` 模式下每次 drain 只取出一条消息
 
 **验证问题**:
 - Q: 用户在 agent 执行工具时按了 Enter 输入了一条消息，这条消息什么时候被处理？
@@ -232,7 +230,7 @@
 3. prepare: 串行；execute: 并发；finalize: 串行（按源顺序）
 4. 没有消费者: 加入 `queue` 缓存；有消费者等待: 从 `waiting` 数组取出 resolver 直接 unblock
 5. 生成一个错误内容的 `ToolResultMessage`，跳过 `executePreparedToolCall`，直接走 `emitToolCallOutcome`
-6. edit 的 execute 做 read→modify→write 三步操作，并行模式下多个 edit 同时读取同一文件的旧内容，各自替换后写入，后写的覆盖先写的（TOCTOU）。`withFileMutationQueue`（Promise 链）按规范文件路径串行化同一文件的写操作
+6. 若无同文件串行化，edit 的 read→modify→write 在并行下会对同一文件产生 TOCTOU；`withFileMutationQueue` 在 execute 路径上按规范路径将同一文件的写操作串成 FIFO，不同文件仍可并行
 7. 在当前 turn 的所有工具调用完成后，`turn_end` 之后，通过 `getSteeringMessages()` 获取并注入到下一个 turn 开始
 8. 因为 `streamSimple()` 的调用者期望同步收到一个 stream 对象。如果 provider throw，调用者无法获得 stream。错误必须通过 stream 事件传播，这样消费者才能统一处理
 9. 不需要。通过 TypeScript 声明合并 (`declare module`)，在 coding-agent 或任何其他包中扩展 `CustomAgentMessages` 接口即可
@@ -369,7 +367,7 @@ export default function (pi: ExtensionAPI) {
 **目标**: 理解 `appendEntry` 如何在会话中保存扩展状态。
 
 **步骤**:
-1. 阅读 `examples/extensions/tools.ts` 的实现
+1. 阅读 `packages/coding-agent/examples/extensions/tools.ts` 的实现
 2. 理解它如何在 `session_start`（含 reason: startup/reload/new/resume/fork）和 `session_tree` 时恢复状态
 
 **验证问题**:
@@ -477,14 +475,13 @@ export default function (pi: ExtensionAPI) {
 
 **步骤**:
 1. 打开 `packages/coding-agent/src/main.ts`，找到 `main()` 函数
-2. 注意**两次参数解析**模式：
-   - 第一次 `parseArgs(args)` 获取 `--extension` 路径
-   - 加载资源后，第二次 `parseArgs(args, extensionFlags)` 识别扩展定义的 CLI 标志
-3. 跟踪到 `buildSessionOptions()` → `createAgentSession()` → 模式选择
+2. 注意 **单次** `parseArgs(args)`：内置标志当场解析；无法识别的 `--foo` 进入 `unknownFlags`，待扩展加载后与已注册的扩展标志匹配（`createAgentSessionServices` 中 `applyExtensionFlagValues`）
+3. 扩展加载并注册标志后，`pi --help` 路径里用 `printHelp(extensionFlags)` 列出扩展 CLI 标志（来自已加载扩展）
+4. 跟踪到 `buildSessionOptions()` → `createAgentSessionFromServices()` → 模式选择
 
 **验证问题**:
-- Q: 为什么需要两次参数解析？
-- A: 扩展可以注册自定义 CLI 标志（如 `--my-ext-debug`）。第一次解析获取扩展路径并加载扩展，扩展注册标志后，第二次解析才能识别这些标志。
+- Q: 扩展定义的 CLI 标志如何与解析流程配合？
+- A: **一次** `parseArgs` 把未知长选项收进 `unknownFlags`；扩展加载后把这些值应用到 `registerFlag` 注册的名上；未匹配任何扩展标志的项会报 diagnostic。`--help` 需在扩展加载后才能打印完整扩展标志列表。
 
 - Q: `pi -p "fix bug"` 和 `echo "fix bug" | pi` 走同一个模式吗？
 - A: 是。管道输入时强制进入 print 模式（检测到 stdin 非 TTY 时设置 print mode）。

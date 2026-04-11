@@ -18,6 +18,8 @@
 | `src/core/sdk.ts` | `createAgentSession()` — 编程式入口 |
 | `src/core/agent-session.ts` | 会话编排器：钩子、事件、持久化 |
 | `src/core/agent-session-runtime.ts` | **AgentSessionRuntime** — 闭包驱动的 session 生命周期管理 (/new, /resume, /fork, /switchSession) |
+| `src/core/agent-session-services.ts` | **AgentSessionServices**、`createAgentSessionServices`、`createAgentSessionFromServices` — cwd 绑定的运行时服务（Settings、ModelRegistry、ResourceLoader）与从服务构建会话 |
+| `src/core/session-cwd.ts` | `getMissingSessionCwdIssue`、`assertSessionCwdExists`、`MissingSessionCwdError` — 会话记录的工作目录缺失时的检测与处理 |
 | `src/core/messages.ts` | 自定义消息类型 + `convertToLlm()` |
 | `src/core/system-prompt.ts` | 系统提示词构建 |
 | `src/core/tools/` | 7 个工具：edit, bash, read, write, grep, find, ls |
@@ -40,7 +42,7 @@
 
 `main()` 是 pi 命令的入口函数。
 
-> **源码**: `packages/coding-agent/src/main.ts` — main() L421
+> **源码**: `packages/coding-agent/src/main.ts` — `main()` L421；环境变量在 `packages/coding-agent/src/cli.ts` 中设置（见步骤 0）
 
 启动流程：
 
@@ -48,27 +50,28 @@
 pi "fix the bug"
     │
     ▼
-main(args)
-  0. 设置 process.env.PI_CODING_AGENT = "true"（子进程可检测是否由 pi 启动）
-  1. 离线模式检查（--offline → 设置 PI_OFFLINE）
-  2. 早期命令处理:
-     └── pi install/remove/update/list → 包管理命令，执行后退出
-     └── pi config → 配置选择器，执行后退出
-  3. 运行迁移（auth、sessions 格式升级）
-  4. 第一次参数解析: parseArgs(args) → 获取 --extension 路径
-  5. 加载资源: DefaultResourceLoader
-     └── 扩展、skills、prompts、themes
-     └── 注册扩展提供的 Provider
-  6. 第二次参数解析: parseArgs(args, extensionFlags) → 含扩展标志
-  7. 短路退出: --version / --help / --list-models / --export
-  8. 读取 stdin（非 RPC 模式；如有管道输入则强制 print 模式）
-  9. 创建 SessionManager（新建/继续/fork/恢复）
-  10. buildSessionOptions() → 构建 CreateAgentSessionOptions
-  11. createAgentSession(options) → 返回 AgentSession
-  12. 选择运行模式:
-      ├── mode === "rpc"    → runRpcMode(session)
-      ├── print 模式        → runPrintMode(session, ...)
-      └── 默认              → InteractiveMode → mode.run()
+cli.ts → main(args)
+  0. `src/cli.ts` 在 import `main` 之前设置 process.env.PI_CODING_AGENT = "true"（子进程可检测是否由 pi 启动）
+  1. 离线模式：`--offline` / PI_OFFLINE → 设置 PI_OFFLINE、PI_SKIP_VERSION_CHECK 等
+  2. 早期命令：`handlePackageCommand` / `handleConfigCommand`，命中则直接 return
+  3. 一次 parseArgs(args)：已知 CLI 选项 + unknownFlags（未识别的 `--foo` 暂存，待扩展加载后校验）
+  4. 若 parseArgs 的 diagnostics 含 error → process.exit(1)
+  5. resolveAppMode；非 interactive 时 takeOverStdout()
+  6. 短路：--version / --export；RPC 模式禁止 @file
+  7. validateForkFlags
+  8. runMigrations(process.cwd())
+  9. 用进程 cwd 创建 startup SettingsManager（此阶段仅用于 sessionDir 等会话查找前的设置）
+  10. createSessionManager → SessionManager（--no-session / --fork / --session / --resume / --continue / 默认新建）
+  11. Session cwd：getMissingSessionCwdIssue；若会话记录的 cwd 不存在 — interactive 可 TUI 确认用当前目录重开 SessionManager.open(..., selectedCwd)，否则报错退出
+  12. 定义 CreateAgentSessionRuntimeFactory 闭包：createAgentSessionServices（加载扩展/skills 等，并将 unknownFlags 与已加载扩展注册的标志对齐）→ buildSessionOptions → createAgentSessionFromServices
+  13. createAgentSessionRuntime(闭包, { cwd: sessionManager.getCwd(), agentDir, sessionManager }) → AgentSessionRuntime（含 session、services、diagnostics）
+  14. 短路：--help（此时才能列出扩展 CLI 标志）/ --list-models
+  15. 非 RPC 时 readPipedStdin；若有管道输入且原为 interactive → 切到 print 模式
+  16. prepareInitialMessage、initTheme、交互模式下 deprecation 警告、reportDiagnostics(runtime)
+  17. 按模式分支：
+      ├── rpc    → runRpcMode(runtime)
+      ├── print/json → runPrintMode(runtime, ...)
+      └── interactive → InteractiveMode.run()
 ```
 
 ### CLI 参数 (src/cli/args.ts)
@@ -85,8 +88,9 @@ main(args)
 | 思考 | `--thinking high` | Thinking level |
 | 文件 | `@file.ts` | 附加文件到初始消息 |
 
-**两次解析模式**: 第一次解析获取 `--extension` 路径，加载扩展后注册扩展标志，
-第二次解析才能识别扩展定义的自定义 CLI 标志。
+**扩展 CLI 标志**: `parseArgs` 只执行一次；未识别的 `--name` 进入 `Args.unknownFlags`。
+在运行时 `createAgentSessionServices` 加载扩展后，再与已注册扩展标志比对（见 `agent-session-services.ts` 中的 `applyExtensionFlagValues`）。
+`--help` 在 runtime 创建之后调用，以便 `printHelp` 能附带扩展注册的 flags。
 
 ## 三种运行模式
 
@@ -203,7 +207,7 @@ createAgentSession(options)                  ← sdk.ts
   3. 恢复会话（或初始化新会话）
   4. 创建 AgentSession（Agent 作为参数传入，不是由 AgentSession 创建）
      → _buildRuntime()
-       → createAllTools(cwd)    // read, bash, edit, write, grep, find, ls
+       → createAllToolDefinitions(cwd, ...)    // read, bash, edit, write, grep, find, ls
        → 加载已预载的扩展      // ResourceLoader 在 createAgentSession 中已加载
        → 创建 ExtensionRunner
        → 绑定钩子（beforeToolCall → emitToolCall, afterToolCall → emitToolResult）
@@ -265,11 +269,12 @@ AgentSessionRuntime（实例）
 | 方法 | 用途 |
 |---|---|
 | `newSession(options?)` | 创建新 session（支持 parentSession 和 setup 回调） |
-| `switchSession(path)` | 切换到指定 session 文件 |
+| `switchSession(sessionPath, cwdOverride?)` | 切换到指定 session 文件 |
 | `fork(entryId)` | 从特定 entry 创建分支 session |
-| `importFromJsonl(path)` | 导入 JSONL session 文件 |
+| `importFromJsonl(inputPath, cwdOverride?)` | 导入 JSONL session 文件 |
 
-所有方法返回 `Promise<{ cancelled: boolean }>`，支持 `session_before_switch` / `session_before_fork` 扩展事件取消操作。
+`newSession`、`switchSession`、`importFromJsonl` 返回 `Promise<{ cancelled: boolean }>`；`fork` 返回 `Promise<{ cancelled: boolean; selectedText?: string }>`。
+取消语义由 `session_before_switch` / `session_before_fork` 扩展事件决定。
 
 ### 与旧架构的区别
 

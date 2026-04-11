@@ -54,6 +54,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
+import { editTool } from "../src/core/tools/edit.js"
 
 describe("edit tool", () => {
   let tempDir: string
@@ -70,11 +71,9 @@ describe("edit tool", () => {
     const filePath = join(tempDir, "test.txt")
     writeFileSync(filePath, "hello world")
 
-    const tool = createEditTool(tempDir)
-    const result = await tool.execute("id", {
-      path: "test.txt",
-      oldText: "hello",
-      newText: "goodbye"
+    const result = await editTool.execute("id", {
+      path: filePath,
+      edits: [{ oldText: "hello", newText: "goodbye" }],
     })
 
     expect(result.content[0].text).toContain("Successfully")

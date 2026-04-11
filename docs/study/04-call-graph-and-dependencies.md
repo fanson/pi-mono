@@ -49,8 +49,7 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   ├── streamAssistantResponse()
 │   │                   │   │
 │   │                   │   ├── config.transformContext(messages)
-│   │                   │   │   └── AgentSession._emitContext()
-│   │                   │   │       └── ExtensionRunner.emit("context")
+│   │                   │   │   └── sdk.ts 注入: async (messages) → ExtensionRunner.emitContext(messages)
 │   │                   │   │
 │   │                   │   ├── config.convertToLlm(messages)
 │   │                   │   │   └── messages.ts: convertToLlm()
@@ -71,18 +70,22 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   │
 │   │                   ├── executeToolCalls()
 │   │                   │   │
-│   │                   │   └── executeToolCallsParallel()
+│   │                   │   ├── toolExecution === "sequential" → executeToolCallsSequential()
+│   │                   │   │   （每个工具调用：prepare → execute → finalize 完全串行后再处理下一个）
+│   │                   │   │
+│   │                   │   └── 否则 → executeToolCallsParallel()
 │   │                   │       │
 │   │                   │       ├── 顺序准备: prepareToolCall()
 │   │                   │       │   ├── 查找工具
-│   │                   │       │   ├── 验证参数
+│   │                   │       │   ├── prepareToolCallArguments()（若工具有 prepareArguments）
+│   │                   │       │   ├── validateToolArguments()
 │   │                   │       │   └── beforeToolCall 钩子
 │   │                   │       │       └── → ExtensionRunner.emitToolCall()
 │   │                   │       │
 │   │                   │       ├── 并发执行: executePreparedToolCall()
 │   │                   │       │   └── tool.execute(id, args, signal)
-│   │                   │       │       ├── edit: 读 → 替换 → 写（无锁，#2327 待修复）
-│   │                   │       │       ├── write: mkdir → 写（无锁）
+│   │                   │       │       ├── edit: withFileMutationQueue 内读 → 替换 → 写（同文件串行）
+│   │                   │       │       ├── write: withFileMutationQueue 内 mkdir → 写（同文件串行）
 │   │                   │       │       ├── bash: ops.exec(command)
 │   │                   │       │       ├── read: ops.readFile(path)
 │   │                   │       │       ├── grep: ops.exec("rg ...")
@@ -96,7 +99,7 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   ├── emit(turn_end)
 │   │                   └── pendingMessages = getSteeringMessages()
 │   │
-│   └── Agent._processLoopEvent(event)
+│   └── Agent.processEvents(event)
 │       ├── 更新 AgentState
 │       └── 通知订阅者
 │
@@ -106,6 +109,8 @@ AgentSession.prompt(text)                   ← coding-agent
     ├── 检查自动压缩                   // 上下文是否过大
     └── 处理错误/重试
 ```
+
+当 `toolExecution === "sequential"` 时，`executeToolCallsSequential` 对每个 tool call 依次完成 prepare → execute → finalize，再处理下一个。默认（parallel）路径下，`executeToolCallsParallel` 先**串行**跑完所有 `prepareToolCall`，再**并发**启动各 `tool.execute`，最后按顺序 await 并完成 finalize（`packages/agent/src/agent-loop.ts`）。
 
 ## 关键抽象边界
 

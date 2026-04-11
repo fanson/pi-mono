@@ -160,7 +160,6 @@ pi.events.on("channel", (data) => {}) // 订阅事件
 ```
 资源事件:
   resources_discover  — 发现技能、提示词、主题路径
-  session_directory   — 自定义会话目录
 
 会话事件:
   session_start       — 会话启动/加载/重载后 (含 reason: startup|reload|new|resume|fork)
@@ -183,8 +182,8 @@ Agent 事件:
   user_bash           — !command 执行前
 
 工具事件:
-  tool_call           — 工具调用前（可阻止）
-  tool_result         — 工具结果后（可修改）
+  tool_call           — 工具调用前（可阻止；亦可就地改写 `event.input`）
+  tool_result         — 工具结果后（可按字段覆盖，见下方链式规则）
 
 模型事件:
   model_select        — 模型选择时
@@ -194,28 +193,33 @@ Agent 事件:
   before_provider_request — HTTP 请求前（可修改 payload）
 ```
 
+**历史说明**：旧版扩展 API 曾包含 `session_directory` 事件以及启动阶段的 `callSessionDirectoryHook()`；**当前已移除**。会话目录由 CLI / settings（如 `--session-dir`）等机制解析，不再通过扩展事件注入。
+
 ### 影响行为的事件
 
 | 事件 | 返回值 | 效果 |
 |------|--------|------|
-| `tool_call` | `{ block: true, reason }` | **阻止**工具执行，第一个阻止的生效 |
-| `tool_result` | `{ content?, details?, isError? }` | **修改**工具结果，所有处理器的改动合并 |
+| `tool_call` | `{ block?: true, reason? }` | **阻止**工具执行，第一个 `block: true` 生效；若不阻止，可**就地**改写 `event.input`（后续处理器看到已改参数；不做 schema 重验） |
+| `tool_result` | `{ content?, details?, isError? }` | **修改**工具结果：对共享事件对象按字段 **last-writer-wins**（`content` / `details` / `isError` 各自独立，后来的处理器覆盖该字段） |
 | `context` | `{ messages? }` | **替换**发给 LLM 的消息，链式传递 |
 | `before_provider_request` | payload | **替换** HTTP 请求体，链式传递 |
 | `before_agent_start` | `{ message?, systemPrompt? }` | **累积**消息，**替换**系统提示词（最后一个生效） |
 | `input` | `{ action: "handled" }` | **拦截**输入，停止后续处理 |
 | `input` | `{ action: "transform", text }` | **变换**输入内容，链式传递 |
 | `user_bash` | `{ operations?, result? }` | **覆盖** bash 执行方式 |
-| `session_before_*` | `{ cancel: true }` | **取消**对应操作 |
+| `session_before_switch` | `{ cancel? }` | **取消**切换会话 |
+| `session_before_fork` | `{ cancel?, skipConversationRestore? }` | **取消** fork，或 fork 后**跳过**恢复对话 |
+| `session_before_compact` | `{ cancel?, compaction? }` | **取消**压缩，或提供可选的 `compaction`（`CompactionResult`） |
+| `session_before_tree` | `{ cancel?, summary?, customInstructions?, … }` | **取消**树导航或覆盖摘要/指令等（见类型） |
 
 ### 事件链处理规则
 
 ```
 tool_call:
-  遍历所有处理器 → 第一个返回 { block: true } 的生效 → 停止遍历
+  遍历所有处理器 → 共享同一 event；可先就地改写 event.input → 若某次返回 { block: true } 则停止并阻止执行
 
 tool_result:
-  遍历所有处理器 → 每个可以修改 event 对象 → 最终结果是所有修改的合并
+  遍历所有处理器 → 共享同一 currentEvent；各处理器可返回字段补丁 → content/details/isError 各自为 last-writer-wins（非深度合并）
 
 context:
   处理器 A 返回 { messages: [...] }
@@ -456,10 +460,7 @@ export default function (pi: ExtensionAPI) {
 ```
 CLI 启动
   │
-  ├── 解析参数
-  │
-  ├── callSessionDirectoryHook()
-  │   └── session_directory 事件（自定义会话目录）
+  ├── 解析参数（含会话目录等 CLI/settings）
   │
   ├── 创建 SessionManager
   │

@@ -7,7 +7,7 @@
 
 ## 上下文压缩系统
 
-> **源码对照**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact L715, findCutPoint L386, generateSummary L530
+> **源码对照**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact、findCutPoint、`generateSummary`；分支摘要另见 `branch-summarization.ts`（`generateBranchSummary` 等，与 compaction 正交）
 
 ### 触发条件
 
@@ -68,7 +68,7 @@ prepareCompaction(pathEntries, settings)
 compact(preparation)
        │
        ├── generateSummary(messagesToSummarize, previousSummary?)
-       │   └── 发给 LLM，请求结构化摘要:
+       │   └── 发给 LLM，请求结构化摘要（摘要调用的 `maxTokens` 为 `Math.floor(0.8 * reserveTokens)`，不是完整 `reserveTokens`）:
        │       ## Goal
        │       ## Constraints & Preferences
        │       ## Progress
@@ -163,6 +163,8 @@ extractFileOperations(previousDetails, toolCalls):
 ```
 
 ### 分支摘要 (Branch Summarization)
+
+分支摘要的实现与主会话压缩分离：**`branch-summarization.ts`**（`generateBranchSummary`、`prepareBranchEntries` 等）；`compaction.ts` 负责沿时间线的上下文压缩。
 
 当用户在会话树中导航到不同分支时：
 

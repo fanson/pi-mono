@@ -10,7 +10,8 @@
 | 文件 | 作用 |
 |------|------|
 | `src/types.ts` | 所有类型定义：Message、Tool、Context、Model、Events |
-| `src/stream.ts` | `streamSimple()`、`complete()` — 公共入口 |
+| `src/stream.ts` | `stream()`、`complete()`（`ProviderStreamOptions`）；`streamSimple()`、`completeSimple()`（`SimpleStreamOptions`，含 `reasoning` 等）— 公共入口 |
+| `src/providers/mistral.ts` | Mistral Chat API（`mistral-conversations`）— `streamMistral` / `streamSimpleMistral` |
 | `src/utils/event-stream.ts` | `EventStream<T, R>` — 推送式异步迭代器 |
 | `src/utils/overflow.ts` | 上下文溢出检测（多 Provider 错误模式匹配） |
 | `src/utils/validation.ts` | 工具参数 AJV 验证（含运行时降级） |
@@ -112,6 +113,7 @@ interface Model<TApi extends Api> {
   provider: Provider  // 如 "anthropic"
   baseUrl: string     // API 端点
   reasoning: boolean  // 是否支持推理
+  input: ("text" | "image")[]  // 模型接受的输入模态
   contextWindow: number
   maxTokens: number
   cost: { input, output, cacheRead, cacheWrite }  // $/百万 token

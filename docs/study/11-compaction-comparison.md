@@ -2,7 +2,7 @@
 
 > 源码对照:
 > - Claude Code: `src/services/compact/` (11 files, ~4000 LOC)
-> - Pi: `packages/coding-agent/src/core/compaction/` (2 files, ~830 LOC)
+> - Pi: `packages/coding-agent/src/core/compaction/`（`compaction.ts`、`utils.ts`、`branch-summarization.ts`、`index.ts`，共 4 个文件，约 1355 行）
 
 ## 架构总览
 
@@ -39,7 +39,7 @@ API 调用前管线 (query.ts 中每次请求前执行):
 ### Pi: 单层压缩
 
 ```
-AgentSession.steer() 中检测:
+AgentSession._checkCompaction()（在 agent_end 处理路径中调用，并在提交新用户提示前再次调用）:
 ┌──────────────────────────────────────────────────────────────────────┐
 │ shouldCompact(contextTokens, contextWindow, settings)?               │
 │    │                                                                 │
@@ -108,7 +108,7 @@ Pi 的阈值实际上更接近上限 — 没有额外的 buffer layer。
 | **填充系数** | MicroCompact 用 4/3 倍保守填充 | 无填充 |
 | **图片/PDF** | 固定 2000 tokens | 固定 4800 chars (~1200 tokens) |
 | **实际用量参考** | `tokenCountWithEstimation()` — 优先使用 API 返回的 `usage`, 回退估算 | `estimateContextTokens()` — 优先使用最后一个 assistant message 的 usage, 回退估算 |
-| **thinking block** | 计算 thinking text, 不计 signature/wrapper | N/A (Pi 不处理 thinking blocks) |
+| **thinking block** | 计算 thinking text, 不计 signature/wrapper | `estimateTokens()` 将 `thinking` 块按字符长度计入（`compaction.ts`）；非 “忽略 thinking” |
 
 两者都采用类似策略: 优先用 API 返回的实际 token 数, 对于尚未发送的消息用启发式估算。
 Pi 对图片使用更高的字符估算 (4800 chars) 但实际转为 token 后约 1200, 接近 Claude Code 的 2000。
@@ -530,7 +530,7 @@ Pi 的 compact 后没有显式的缓存清理步骤。compact 通过修改 sessi
 ```
                     Claude Code                      Pi
                     ───────────                      ──
-复杂度              11 files, ~4000 LOC              2 files, ~830 LOC
+复杂度              11 files, ~4000 LOC              4 files, ~1355 LOC
 层次                4 层 (MC → Snip → AC → CC)       1 层 (Full Compact)
 MicroCompact        ✔ (time-based + cached MC)       ✘
 Session Memory      ✔ (无 LLM, 即时)                 ✘
@@ -551,7 +551,7 @@ Provider 锁定       ✔ (cache_edits 限 Anthropic)      ✘ (provider 中立)
 
 ### 适合纳入核心
 
-1. **熔断器** (低难度, 高价值): 在 `steer()` 中添加连续压缩失败计数, 3 次后停止自动触发。防止无限循环。
+1. **熔断器** (低难度, 高价值): 在 `_checkCompaction` / 自动压缩路径上添加连续失败计数, 3 次后停止自动触发。防止无限循环。
 2. **PTL 恢复** (中难度, 高价值): `generateSummary()` 中如果 LLM 报 prompt_too_long, 截断最旧消息后重试。
 3. **token 估算填充** (低难度, 中价值): `estimateTokens()` 结果乘 4/3, 减少因低估导致的意外 overflow。
 

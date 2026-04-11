@@ -268,7 +268,7 @@ execute({ command, timeout }, signal, onUpdate):
      - 每次 data 事件 → onUpdate（截断后的滚动缓冲区）
   6. close 事件:
      - 清理超时/监听器
-     - 如果 abort → reject("aborted")
+     - 如果 abort → 内层先 reject(Error("aborted"))，catch 中拼接已缓冲输出并附加 "Command aborted" 再 reject
      - 如果超时 → reject("timeout:${seconds}")
      - 如果 exitCode ≠ 0 → reject（含输出文本 + 退出码）
      - 否则 → resolve({ content, details })
@@ -351,7 +351,7 @@ interface BashOperations {
 read 是唯一能处理图片的工具：
 
 ```
-如果 detectImageMimeType(absolutePath) 返回 mime 类型:
+如果 await detectImageMimeType(absolutePath) 返回 mime 类型:
   1. readFile → Buffer
   2. resizeImage(buffer, 2000, 2000)  — 缩放到 2000x2000 以内
   3. 返回:
@@ -383,7 +383,7 @@ offset + limit 应用:
 interface ReadOperations {
   readFile: (absolutePath: string) => Promise<Buffer>
   access: (absolutePath: string) => Promise<void>
-  detectImageMimeType?: (absolutePath: string) => string | undefined
+  detectImageMimeType?: (absolutePath: string) => Promise<string | null | undefined>
 }
 ```
 
@@ -427,21 +427,19 @@ interface WriteOperations {
 ```
 execute({ pattern, path, glob, ignoreCase, literal, context, limit }):
   1. ensureTool("rg", true)  — 确保 ripgrep 可用
-  2. 构建 rg 参数:
+  2. 构建 rg 参数（不含 ripgrep 的 -C/--context）:
      rg --json --line-number --color=never --hidden
      --ignore-case (如果 ignoreCase)
      --fixed-strings (如果 literal)
      --glob (如果有 glob)
-     --context-separator="" (如果有 context)
-     -C ${context} (如果有 context)
-  3. spawn rg 进程
-  4. 解析 JSON 行输出
-  5. 收集匹配直到 limit（默认 100）
-  6. 达到限制 → 杀死 rg 进程
-  7. 每个匹配: truncateLine（500 字符）
-  8. 按文件分组，带上下文行
-  9. truncateHead（总字节限制）
-  10. 返回格式化文本
+     pattern searchPath
+  3. spawn rg 进程，解析 JSON 流式行（type === "match" 时记录 filePath + lineNumber）
+  4. 收集匹配直到 limit（默认 100），达到限制 → 杀死 rg
+  5. rg 结束后，对每个匹配调用 formatBlock():
+     用 ops.readFile 按行读入源文件，按 context 参数在内存中截取前后行（非 rg 的上下文模式）
+  6. 每行 truncateLine（500 字符）
+  7. truncateHead（总字节限制）
+  8. 返回格式化文本
 ```
 
 ### 输出格式
@@ -470,8 +468,9 @@ execute({ pattern, path, limit }):
   1. 如果有自定义 ops.glob → 使用它
   2. 否则: ensureTool("fd", true)
   3. 构建 fd 参数:
-     fd --glob --hidden --no-ignore-parent
-     --ignore-file .gitignore (收集所有 .gitignore)
+     fd --glob --color=never --hidden --max-results <limit>
+     --ignore-file <path>（搜索树内各 .gitignore，含根与嵌套）
+     pattern searchPath
   4. spawnSync 执行
   5. 相对化路径 + POSIX 格式
   6. 限制结果数量（默认 1000）
