@@ -51,6 +51,31 @@ pi.registerTool({
 })
 ```
 
+### defineTool 辅助函数
+
+v0.66+ 新增 `defineTool` 类型辅助函数，用于在扩展外部定义工具时保持 TypeScript 泛型推断：
+
+```typescript
+import { defineTool } from "@mariozechner/pi-coding-agent"
+
+const myTool = defineTool({
+  name: "my-tool",
+  label: "My Tool",
+  description: "...",
+  parameters: Type.Object({ query: Type.String() }),
+  execute: async (id, args, signal) => {
+    // args.query 自动推断为 string
+    return { resultForAssistant: args.query }
+  }
+})
+
+// 用于 SDK 的 customTools 数组或变量传递
+createAgentSession({ customTools: [myTool] })
+```
+
+直接在 `pi.registerTool()` 内联时不需要 `defineTool`（上下文类型推断足够），
+仅在赋值给变量或放入数组时需要。
+
 ### 命令注册
 
 ```typescript
@@ -233,7 +258,7 @@ errorListeners: Set<ErrorListener>   // 错误监听器
    → 替换 runtime.registerProvider/unregisterProvider 为立即生效版本
 
 3. ExtensionRunner.bindCommandContext(actions?)
-   → 绑定 waitForIdle/newSession/fork 等
+   → 绑定 waitForIdle/newSession/fork/switchSession/navigateTree/reload 等
    → 如果不提供 actions，命令操作变为 no-op
 
 4. ExtensionRunner.setUIContext(uiContext)
@@ -283,14 +308,25 @@ interface ExtensionContext {
 
 ```typescript
 interface ExtensionCommandContext extends ExtensionContext {
-  waitForIdle: () => Promise<void>
-  newSession: () => void
-  fork: (entryId?) => void
-  navigateTree: () => void
-  switchSession: () => void
-  reload: () => void
+  waitForIdle(): Promise<void>
+  newSession(options?: {
+    parentSession?: string
+    setup?: (sessionManager: SessionManager) => Promise<void>
+  }): Promise<{ cancelled: boolean }>
+  fork(entryId: string): Promise<{ cancelled: boolean }>
+  navigateTree(targetId: string, options?: {
+    summarize?: boolean
+    customInstructions?: string
+    replaceInstructions?: boolean
+    label?: string
+  }): Promise<{ cancelled: boolean }>
+  switchSession(sessionPath: string): Promise<{ cancelled: boolean }>
+  reload(): Promise<void>
 }
 ```
+
+**注意**: v0.65+ 中 `newSession`、`fork`、`navigateTree`、`switchSession` 均改为异步方法，
+返回 `{ cancelled: boolean }` 表示扩展是否通过 `session_before_switch` / `session_before_fork` 事件取消了操作。
 
 ## 扩展加载
 

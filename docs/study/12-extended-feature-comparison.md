@@ -572,7 +572,7 @@ Pi 有完整的 session restore:
 - `SessionManager` (`session-manager.ts`): append-only JSONL, 版本化 (v3)
 - `--resume` / `-r` CLI 参数 (`args.ts`)
 - `session-picker.ts`: 交互式选择历史 session
-- `AgentSessionRuntimeHost` (`agent-session-runtime.ts`): 管理 `/new`, `/resume`, `/fork` 命令
+- `AgentSessionRuntime` (`agent-session-runtime.ts`): 闭包工厂模式管理 `/new`, `/resume`, `/fork`, `/switchSession` 命令
 - `session_start` 事件带 `reason` 字段 (startup/reload/new/resume/fork)
 - 扩展可通过 `CustomEntry` 持久化状态
 

@@ -17,7 +17,7 @@
 | `src/modes/print-mode.ts` | 单次执行模式：`pi -p "prompt"` |
 | `src/core/sdk.ts` | `createAgentSession()` — 编程式入口 |
 | `src/core/agent-session.ts` | 会话编排器：钩子、事件、持久化 |
-| `src/core/agent-session-runtime.ts` | **AgentSessionRuntimeHost** — 管理 session 切换 (/new, /resume, /fork) |
+| `src/core/agent-session-runtime.ts` | **AgentSessionRuntime** — 闭包驱动的 session 生命周期管理 (/new, /resume, /fork, /switchSession) |
 | `src/core/messages.ts` | 自定义消息类型 + `convertToLlm()` |
 | `src/core/system-prompt.ts` | 系统提示词构建 |
 | `src/core/tools/` | 7 个工具：edit, bash, read, write, grep, find, ls |
@@ -49,6 +49,7 @@ pi "fix the bug"
     │
     ▼
 main(args)
+  0. 设置 process.env.PI_CODING_AGENT = "true"（子进程可检测是否由 pi 启动）
   1. 离线模式检查（--offline → 设置 PI_OFFLINE）
   2. 早期命令处理:
      └── pi install/remove/update/list → 包管理命令，执行后退出
@@ -239,6 +240,41 @@ beforeToolCall: async ({ toolCall, args }) => {
 
 `_agentEventQueue` 确保 `SessionManager` 已经持久化了 assistant 消息，
 然后再让扩展的 `tool_call` 处理器看到上下文。防止扩展看到不一致的状态。
+
+## AgentSessionRuntime (src/core/agent-session-runtime.ts)
+
+> **源码**: `packages/coding-agent/src/core/agent-session-runtime.ts` — AgentSessionRuntime L54
+
+`AgentSessionRuntime` 采用**闭包工厂模式**管理 session 的完整生命周期。
+
+### 核心设计
+
+```
+CreateAgentSessionRuntimeFactory（闭包）
+  → 闭合进程全局的固定输入（Provider 配置、ResourceLoader 等）
+  → 每次调用根据新 cwd/sessionManager 重建 cwd 绑定的 services
+  → 返回新的 AgentSession + AgentSessionServices + 诊断信息
+
+AgentSessionRuntime（实例）
+  → 持有当前 session、services 和工厂闭包
+  → session 切换时: teardownCurrent() → createRuntime({新参数}) → apply()
+```
+
+### 提供的 session 操作
+
+| 方法 | 用途 |
+|---|---|
+| `newSession(options?)` | 创建新 session（支持 parentSession 和 setup 回调） |
+| `switchSession(path)` | 切换到指定 session 文件 |
+| `fork(entryId)` | 从特定 entry 创建分支 session |
+| `importFromJsonl(path)` | 导入 JSONL session 文件 |
+
+所有方法返回 `Promise<{ cancelled: boolean }>`，支持 `session_before_switch` / `session_before_fork` 扩展事件取消操作。
+
+### 与旧架构的区别
+
+v0.65 之前使用 `AgentSessionRuntimeHost` 接口，session 替换逻辑分散在多个方法中。
+v0.65+ 改为闭包工厂 + `AgentSessionRuntime` 类，所有 session 切换统一走 `teardownCurrent() → createRuntime() → apply()` 路径。
 
 ## 自定义消息类型 (src/core/messages.ts)
 
@@ -823,6 +859,22 @@ disable-model-invocation: false
 | **模型自动调用** | `disableModelInvocation: false` 时，skill 描述出现在系统提示词中，模型按需读取 |
 | **用户手动调用** | `/skill:my-skill` 命令（需开启 `enableSkillCommands`） |
 | **隐藏 skill** | `disableModelInvocation: true` → 仅通过 `/skill:name` 访问 |
+
+### 名称冲突与优先级
+
+同名 skill 按路径加载顺序决定优先级，**先加载的 skill 胜出**：
+
+```
+加载顺序（优先级从高到低）:
+  1. 用户级 (~/.pi/agent/skills/)
+  2. 项目级 (.pi/skills/)
+  3. 包级 (通过 package manager)
+  4. CLI 指定的 skillPaths（按数组顺序）
+
+冲突处理:
+  同名时生成 collision 诊断（包含 winnerPath 和 loserPath）
+  用户/项目 skills 可覆盖包中的同名 skill
+```
 
 ### 验证规则
 

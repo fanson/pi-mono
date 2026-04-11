@@ -115,6 +115,19 @@ interface Model<TApi extends Api> {
   contextWindow: number
   maxTokens: number
   cost: { input, output, cacheRead, cacheWrite }  // $/百万 token
+  compat?: OpenAICompletionsCompat  // OpenAI Completions 兼容层配置
+}
+
+// OpenRouter 路由控制（通过 compat.openRouterRouting 设置）
+interface OpenRouterRouting {
+  allow_fallbacks?: boolean     // 允许备用 Provider（默认 true）
+  order?: string[]              // Provider 尝试顺序
+  only?: string[]               // 仅限指定 Provider
+  ignore?: string[]             // 排除指定 Provider
+  quantizations?: string[]      // 量化偏好
+  sort?: string | { by?: string; partition?: string }  // 排序策略
+  max_price?: { prompt?: number; completion?: number }  // 最高价格限制
+  // ... 更多字段详见 OpenRouter 文档
 }
 
 interface Context {
@@ -457,7 +470,7 @@ faux.setResponses([
 | Provider | 禁用方式 |
 |----------|---------|
 | **Anthropic** | 发送 `thinking: { type: "disabled" }`（仅 reasoning 模型 + `thinkingEnabled: false`） |
-| **Google / Vertex / Gemini CLI** | Gemini 2.x: `thinkingBudget: 0`；Gemini 3: 使用最低 `thinkingLevel`（无法完全禁用） |
+| **Google / Vertex / Gemini CLI** | Gemini 2.x: `thinkingBudget: 0`；Gemini 3: 使用最低 `thinkingLevel`（无法完全禁用）；**Gemma 4**: 使用 `thinkingLevel: "MINIMAL"`（与 Gemini 3 类似，仅支持 MINIMAL/HIGH 两级） |
 | **OpenAI / Azure Responses** | `reasoning: { effort: "none" }`（Copilot 例外：完全省略 `reasoning` 字段避免 400 错误） |
 
 ### 缓存 Token 计费修正
