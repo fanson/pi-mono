@@ -250,7 +250,7 @@ interface EditOperations {
 
 ## bash 工具深入分析
 
-> **源码对照**: `packages/coding-agent/src/core/tools/bash.ts` execute L182
+> **源码对照**: `packages/coding-agent/src/core/tools/bash.ts` execute L275
 
 ### 执行流程
 
@@ -344,7 +344,7 @@ interface BashOperations {
 
 ## read 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/read.ts` execute L58
+> **源码对照**: `packages/coding-agent/src/core/tools/read.ts` execute L127
 
 ### 特殊能力
 
@@ -391,7 +391,7 @@ interface ReadOperations {
 
 ## write 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/write.ts` execute L44
+> **源码对照**: `packages/coding-agent/src/core/tools/write.ts` execute L194
 
 ### 执行流程
 
@@ -420,7 +420,7 @@ interface WriteOperations {
 
 ## grep 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/grep.ts` execute L71
+> **源码对照**: `packages/coding-agent/src/core/tools/grep.ts` execute L133
 
 ### 执行流程
 
@@ -461,7 +461,7 @@ pattern 在 file2.ts 中:
 
 ## find 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/find.ts` execute L64
+> **源码对照**: `packages/coding-agent/src/core/tools/find.ts` execute L123
 
 ### 执行流程
 
@@ -483,7 +483,7 @@ execute({ pattern, path, limit }):
 
 ## ls 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/ls.ts` execute L54
+> **源码对照**: `packages/coding-agent/src/core/tools/ls.ts` execute L110
 
 ### 执行流程
 

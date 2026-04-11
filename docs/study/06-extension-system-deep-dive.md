@@ -26,7 +26,7 @@ export default function (pi: ExtensionAPI) {
 
 ## Extension API 完整接口
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — ExtensionAPI L988, ExtensionEvent L851
+> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — ExtensionAPI L986, ExtensionEvent L859
 
 ### 事件订阅
 

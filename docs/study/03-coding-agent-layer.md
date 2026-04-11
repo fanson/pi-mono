@@ -40,7 +40,7 @@
 
 `main()` 是 pi 命令的入口函数。
 
-> **源码**: `packages/coding-agent/src/main.ts` — main() L663
+> **源码**: `packages/coding-agent/src/main.ts` — main() L421
 
 启动流程：
 
@@ -72,7 +72,7 @@ main(args)
 
 ### CLI 参数 (src/cli/args.ts)
 
-> **源码**: `packages/coding-agent/src/cli/args.ts` — parseArgs L56
+> **源码**: `packages/coding-agent/src/cli/args.ts` — parseArgs L58
 
 | 参数组 | 示例 | 用途 |
 |---|---|---|
@@ -91,7 +91,7 @@ main(args)
 
 ### Interactive 模式（默认）
 
-> **源码**: `packages/coding-agent/src/modes/interactive/interactive-mode.ts` — InteractiveMode L147
+> **源码**: `packages/coding-agent/src/modes/interactive/interactive-mode.ts` — InteractiveMode L157
 
 `InteractiveMode` 基于 `@mariozechner/pi-tui` 提供完整的终端 UI：
 
@@ -189,7 +189,7 @@ AgentSession 把所有组件连接在一起：
 
 ### 构建流程
 
-> **源码**: `packages/coding-agent/src/core/sdk.ts` — createAgentSession L174
+> **源码**: `packages/coding-agent/src/core/sdk.ts` — createAgentSession L169
 
 ```
 createAgentSession(options)                  ← sdk.ts
@@ -214,7 +214,7 @@ AgentSession 本身不负责 Agent 的构建。
 
 ### 钩子桥接
 
-> **源码**: `packages/coding-agent/src/core/agent-session.ts` — AgentSession L232, steer L1138, _buildRuntime L318
+> **源码**: `packages/coding-agent/src/core/agent-session.ts` — AgentSession L232, steer L1138, _buildRuntime L2290
 
 AgentSession 把 agent-core 的钩子桥接到扩展系统：
 
@@ -465,7 +465,7 @@ BuildSystemPromptOptions:
 
 ## 扩展系统
 
-> **源码**: `packages/coding-agent/src/core/extensions/` — types.ts (ExtensionAPI L988), runner.ts (ExtensionRunner L202), loader.ts（详见 [06-extension-system-deep-dive.md](06-extension-system-deep-dive.md)）
+> **源码**: `packages/coding-agent/src/core/extensions/` — types.ts (ExtensionAPI L986), runner.ts (ExtensionRunner L202), loader.ts（详见 [06-extension-system-deep-dive.md](06-extension-system-deep-dive.md)）
 
 ### 加载路径
 
@@ -639,7 +639,7 @@ interface Settings {
 
 ## Resource Loading (src/core/resource-loader.ts)
 
-> **源码**: `packages/coding-agent/src/core/resource-loader.ts` — DefaultResourceLoader L150
+> **源码**: `packages/coding-agent/src/core/resource-loader.ts` — DefaultResourceLoader L151
 
 统一管理所有可加载资源的生命周期：
 
@@ -727,7 +727,7 @@ API key 优先级：**runtime > file > env > fallback**
 
 ## Model Registry (src/core/model-registry.ts)
 
-> **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L255
+> **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L289
 
 管理内置模型和用户自定义模型/Provider。
 
@@ -832,7 +832,7 @@ disable-model-invocation: false
 
 ## Package Manager (src/core/package-manager.ts)
 
-> **源码**: `packages/coding-agent/src/core/package-manager.ts` — DefaultPackageManager L681
+> **源码**: `packages/coding-agent/src/core/package-manager.ts` — DefaultPackageManager L710
 
 管理扩展、skills、prompts、themes 的安装和更新。
 

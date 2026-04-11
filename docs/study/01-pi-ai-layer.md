@@ -22,7 +22,7 @@
 
 ## 核心类型 (src/types.ts)
 
-> **源码对照**: `packages/ai/src/types.ts` — Message L213, Usage L167-180, Model L314, CacheRetention L56, AssistantMessageEvent L237
+> **源码对照**: `packages/ai/src/types.ts` — Message L213, Usage L167-180, Model L379, CacheRetention L56, AssistantMessageEvent L237
 
 ### 消息类型
 

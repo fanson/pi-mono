@@ -79,7 +79,7 @@
 
 **步骤**:
 1. 打开 `packages/ai/src/utils/event-stream.ts`
-2. 完整阅读 `EventStream` 类（约 65 行）
+2. 完整阅读 `EventStream` 类（第 4 行起）
 3. 模拟这个场景:
    ```
    const stream = new EventStream(e => e === "end", e => e)
@@ -473,7 +473,7 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解从 `pi "fix the bug"` 到 agent 开始工作的完整路径。
 
-> **源码对照**: `packages/coding-agent/src/main.ts` — main() L623
+> **源码对照**: `packages/coding-agent/src/main.ts` — main() L421
 
 **步骤**:
 1. 打开 `packages/coding-agent/src/main.ts`，找到 `main()` 函数
@@ -496,9 +496,9 @@ export default function (pi: ExtensionAPI) {
 **步骤**:
 1. 在 `main()` 末尾找到模式选择分支
 2. 分别打开三个入口：
-   - `src/modes/interactive/interactive-mode.ts` — InteractiveMode L144
-   - `src/modes/print-mode.ts` — runPrintMode L30
-   - `src/modes/rpc/rpc-mode.ts` — runRpcMode L45
+   - `src/modes/interactive/interactive-mode.ts` — InteractiveMode L157
+   - `src/modes/print-mode.ts` — runPrintMode L31
+   - `src/modes/rpc/rpc-mode.ts` — runRpcMode L46
 
 **验证问题**:
 - Q: 在 RPC 模式下，谁负责显示输出？
@@ -531,7 +531,7 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解 skill 的发现、验证和调用机制。
 
-> **源码对照**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L147
+> **源码对照**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L172
 
 **场景**: 创建一个 `code-review` skill。
 
@@ -570,7 +570,7 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解全局和项目级配置的合并行为。
 
-> **源码对照**: `packages/coding-agent/src/core/settings-manager.ts` — deepMergeSettings L100
+> **源码对照**: `packages/coding-agent/src/core/settings-manager.ts` — deepMergeSettings L101
 
 **场景**:
 ```json
