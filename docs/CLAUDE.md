@@ -1,6 +1,6 @@
 # study/architecture-analysis Branch Rules
 
-This file adds branch-specific guidance on top of `AGENTS.md`.
+This file adds docs-specific branch guidance on top of `AGENTS.md`.
 
 ## Branch Model
 
@@ -11,7 +11,7 @@ This file adds branch-specific guidance on top of `AGENTS.md`.
 ## What Should Persist Here
 
 - Branch-specific long-lived changes should stay in `docs/**`.
-- This `CLAUDE.md` is the allowed root-level exception because it defines how this branch is maintained.
+- This `docs/CLAUDE.md` keeps the branch operating model inside the docs overlay itself.
 - Do not introduce branch-only changes under `packages/**` unless the user explicitly asks.
 
 ## Default Sync Workflow
