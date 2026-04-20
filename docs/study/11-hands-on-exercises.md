@@ -10,25 +10,25 @@
 **步骤**:
 1. 打开 `packages/agent/src/agent-loop.ts`，找到 `executeToolCallsParallel()` 函数
 2. 跟踪这个调用链:
-   - LLM 返回了 `{ type: "toolCall", name: "edit", arguments: { path, oldText, newText } }`
+   - LLM 返回了 `{ type: "toolCall", name: "edit", arguments: { path, edits: [{ oldText, newText }] } }`
    - `prepareToolCall()` 做了什么？（找到工具、验证参数、运行 beforeToolCall 钩子）
    - `executePreparedToolCall()` 调用的是哪个函数？
 3. 跳到 `packages/coding-agent/src/core/tools/edit.ts`，从 `execute` 方法开始读
-4. 注意：当前 `edit.ts` 的 `execute` 方法直接调用 `ops.readFile` → 替换 → `ops.writeFile`，
-   没有并发保护。这就是 #2327 竞态条件 bug 的根源。
+4. 注意：当前 `edit.ts` 的 `execute` 方法把 read → replace → write 包在
+   `withFileMutationQueue()` 中；同一文件的编辑会被 FIFO 串行化，不同文件仍可并行。
 
 **验证问题**:
 - Q: 如果 LLM 同时返回 3 个 edit 调用（同一文件），当前（main）会发生什么？
-- A: 准备阶段按顺序（A→B→C），执行阶段并发启动——三个 edit 同时读取文件，
-  各自基于相同的原始内容做替换，后写入的覆盖先写入的，导致编辑丢失。
-  这就是 TOCTOU（Time-of-Check-to-Time-of-Use）竞态条件。
+- A: prepare 阶段仍然顺序执行，但真正的 read-modify-write 关键区会通过
+  `withFileMutationQueue()` 排队。也就是说，同一文件会按 A→B→C 串行进入，
+  后一个 edit 会基于前一个 edit 已写回的最新内容继续执行，而不是并发覆盖。
 
 - Q: `withFileMutationQueue` 如何解决这个问题？
 - A: 在 execute 阶段，同一文件（规范路径）的操作通过 Promise 链串行化（FIFO），
   不同文件仍然完全并行。
 
 **动手**: 阅读 `packages/coding-agent/src/core/tools/edit.ts` 的 `execute` 方法，
-找到 read-modify-write 的三步操作，理解为什么并发执行会丢失编辑。
+找到 `withFileMutationQueue()` 包围的关键区，理解为什么同一文件不会再发生旧的丢编辑竞态。
 
 ---
 
@@ -50,7 +50,7 @@
   3. 在 `convertToLlm()` 的 switch 中添加 case，决定如何映射为 `user` 消息
 
 - Q: 如果你忘了在 `convertToLlm()` 添加 case 会怎样？
-- A: 该消息会被 `default` 分支过滤掉（返回 undefined），LLM 永远看不到它。
+- A: 在这套严格类型写法里，正常情况会先触发 `switch` 的 exhaustiveness type error，逼你补上 case；如果你绕过了类型系统，运行时才会落到 `default` 并被过滤掉。
 
 ---
 
@@ -64,7 +64,7 @@
 3. 跟踪:
    - `getSteeringMessages()` 在哪里被调用？（内层循环末尾，每个 turn 之后）
    - `getFollowUpMessages()` 在哪里被调用？（外层循环末尾，agent 本来要停止时）
-4. 打开 `packages/agent/src/agent.ts`，看 `dequeueSteeringMessages()` 的 `one-at-a-time` 模式
+4. 打开 `packages/agent/src/agent.ts`，看 `getSteeringMessages()` 如何从 `this.steeringQueue.drain()` 取消息，并结合 `steeringMode`（默认 `one-at-a-time`）理解行为
 
 **验证问题**:
 - Q: 用户在 agent 执行工具时按了 Enter 输入了一条消息，这条消息什么时候被处理？
@@ -122,9 +122,11 @@
 1. `packages/coding-agent/src/core/tools/count.ts`（新建）
    ```typescript
    import type { AgentTool } from "@mariozechner/pi-agent-core"
-   import { type Static, Type } from "@sinclair/typebox"
+   import { Type } from "@sinclair/typebox"
    import { readFile } from "fs/promises"
+   import type { ToolDefinition } from "../extensions/types.js"
    import { resolveToCwd } from "./path-utils.js"
+   import { wrapToolDefinition } from "./tool-definition-wrapper.js"
    
    const countSchema = Type.Object({
      path: Type.String({ description: "Path to the file" }),
@@ -138,9 +140,9 @@
      readFile: (path) => readFile(path),
    }
    
-   export function createCountTool(cwd: string, options?: {
+   export function createCountToolDefinition(cwd: string, options?: {
      operations?: CountOperations
-   }): AgentTool<typeof countSchema> {
+   }): ToolDefinition<typeof countSchema, { lines: number }> {
      const ops = options?.operations ?? defaultCountOperations
      return {
        name: "count",
@@ -158,11 +160,17 @@
        },
      }
    }
+
+   export function createCountTool(cwd: string, options?: {
+     operations?: CountOperations
+   }): AgentTool<typeof countSchema, { lines: number }> {
+     return wrapToolDefinition(createCountToolDefinition(cwd, options))
+   }
    ```
 
 2. `packages/coding-agent/src/core/tools/index.ts`
-   - 导出 `createCountTool`
-   - 在 `createAllTools()` 中添加
+   - 导出 `createCountToolDefinition` 和 `createCountTool`
+   - 在 definition-first 路径中注册它（与现有工具模式保持一致）
 
 **验证问题**:
 - Q: 为什么 `CountOperations` 是必要的？
@@ -186,7 +194,7 @@
 1. 打开 `packages/coding-agent/src/core/agent-session.ts`
 2. 找到构造函数，理解它做了什么:
    - 订阅 agent 事件
-   - 设置 `setBeforeToolCall` / `setAfterToolCall`
+   - 给 `agent.beforeToolCall` / `agent.afterToolCall` 赋值（或追踪 `AgentOptions` 中的同名字段）
    - 调用 `_buildRuntime()`
 3. 找到 `_buildRuntime()`:
    - `createAllTools()` 创建所有工具
@@ -219,7 +227,7 @@
 3. **工具执行**: 并行模式下，两个 edit 调用的三个阶段（prepare、execute、finalize）分别是串行还是并发？
 4. **事件流**: `EventStream.push()` 在没有消费者时做什么？有消费者等待时做什么？
 5. **扩展钩子**: `beforeToolCall` 返回 `{ block: true }` 后，循环做了什么？
-6. **并发问题**: 当前 main 分支的 edit 工具在并行模式下有什么竞态条件？PR #2327 如何修复？
+6. **并发问题**: 当前 main 分支如何避免同一文件的 edit/write 竞态？`withFileMutationQueue()` 修复了什么、又刻意没有修复什么？
 7. **steering vs follow-up**: 用户在工具执行期间发送的消息，什么时候被注入到上下文？
 8. **Provider 契约**: 为什么 provider 不能 throw，必须把错误编码在 stream 事件中？
 9. **声明合并**: 如果想添加一个新的自定义消息类型，需要修改 agent-core 的代码吗？
@@ -232,7 +240,7 @@
 3. prepare: 串行；execute: 并发；finalize: 串行（按源顺序）
 4. 没有消费者: 加入 `queue` 缓存；有消费者等待: 从 `waiting` 数组取出 resolver 直接 unblock
 5. 生成一个错误内容的 `ToolResultMessage`，跳过 `executePreparedToolCall`，直接走 `emitToolCallOutcome`
-6. edit 的 execute 做 read→modify→write 三步操作，并行模式下多个 edit 同时读取同一文件的旧内容，各自替换后写入，后写的覆盖先写的（TOCTOU）。`withFileMutationQueue`（Promise 链）按规范文件路径串行化同一文件的写操作
+6. 当前 main 通过 `withFileMutationQueue()` 把**同一文件**的内部 tool mutation 串成 FIFO 队列，修复了多个 edit/write 同时命中同一路径时的内部竞态；但它**没有**检测关键区内部发生的外部修改（如 formatter、git hook、其他进程写入）
 7. 在当前 turn 的所有工具调用完成后，`turn_end` 之后，通过 `getSteeringMessages()` 获取并注入到下一个 turn 开始
 8. 因为 `streamSimple()` 的调用者期望同步收到一个 stream 对象。如果 provider throw，调用者无法获得 stream。错误必须通过 stream 事件传播，这样消费者才能统一处理
 9. 不需要。通过 TypeScript 声明合并 (`declare module`)，在 coding-agent 或任何其他包中扩展 `CustomAgentMessages` 接口即可
@@ -473,18 +481,19 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解从 `pi "fix the bug"` 到 agent 开始工作的完整路径。
 
-> **源码对照**: `packages/coding-agent/src/main.ts` — main() L623
+> **源码对照**: `packages/coding-agent/src/main.ts` — `main()`
 
 **步骤**:
 1. 打开 `packages/coding-agent/src/main.ts`，找到 `main()` 函数
-2. 注意**两次参数解析**模式：
-   - 第一次 `parseArgs(args)` 获取 `--extension` 路径
-   - 加载资源后，第二次 `parseArgs(args, extensionFlags)` 识别扩展定义的 CLI 标志
+2. 注意当前是**一次核心参数解析 + 扩展未知标志延后解释**：
+   - `parseArgs(args)` 先解析核心参数
+   - 扩展标志保存在 `parsed.unknownFlags`
+   - 运行时加载扩展后，再按扩展注册的 flag 定义解释这些值
 3. 跟踪到 `buildSessionOptions()` → `createAgentSession()` → 模式选择
 
 **验证问题**:
-- Q: 为什么需要两次参数解析？
-- A: 扩展可以注册自定义 CLI 标志（如 `--my-ext-debug`）。第一次解析获取扩展路径并加载扩展，扩展注册标志后，第二次解析才能识别这些标志。
+- Q: 为什么现在不需要两次 `parseArgs()`？
+- A: 因为核心 CLI 先把未知扩展标志保留在 `parsed.unknownFlags`，等扩展加载完成后再由运行时按注册的 flag 解释，不再重新跑一遍完整参数解析。
 
 - Q: `pi -p "fix bug"` 和 `echo "fix bug" | pi` 走同一个模式吗？
 - A: 是。管道输入时强制进入 print 模式（检测到 stdin 非 TTY 时设置 print mode）。
@@ -496,9 +505,9 @@ export default function (pi: ExtensionAPI) {
 **步骤**:
 1. 在 `main()` 末尾找到模式选择分支
 2. 分别打开三个入口：
-   - `src/modes/interactive/interactive-mode.ts` — InteractiveMode L144
-   - `src/modes/print-mode.ts` — runPrintMode L30
-   - `src/modes/rpc/rpc-mode.ts` — runRpcMode L45
+   - `src/modes/interactive/interactive-mode.ts` — `InteractiveMode`
+   - `src/modes/print-mode.ts` — `runPrintMode`
+   - `src/modes/rpc/rpc-mode.ts` — `runRpcMode`
 
 **验证问题**:
 - Q: 在 RPC 模式下，谁负责显示输出？
@@ -511,7 +520,7 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解 `pi --provider anthropic --model sonnet` 如何解析为具体模型。
 
-> **源码对照**: `packages/coding-agent/src/core/model-resolver.ts` — resolveCliModel L328
+> **源码对照**: `packages/coding-agent/src/core/model-resolver.ts` — `resolveCliModel`
 
 **步骤**:
 1. 打开 `src/core/model-resolver.ts`
@@ -521,8 +530,8 @@ export default function (pi: ExtensionAPI) {
    - `resolveModelScope()` → 模糊搜索所有 provider
 
 **验证问题**:
-- Q: `pi --model "anthropic:claude-sonnet-4:high"` 中的 `:high` 被谁消费？
-- A: `parseModelPattern()` 解析为 `{ provider: "anthropic", modelId: "claude-sonnet-4", thinkingLevel: "high" }`。thinkingLevel 传递给 agent-core 的 streamOptions。
+- Q: `pi --model "anthropic/claude-sonnet-4:high"` 中的 `:high` 被谁消费？
+- A: `parseModelPattern()` 先解析出 `{ model, thinkingLevel, warning }`，其中 `thinkingLevel === "high"`；随后它被传给 agent-core / streamOptions。
 
 - Q: 如果没有指定任何模型，默认用什么？
 - A: `findInitialModel()` 从 `defaultModelPerProvider` 中按顺序查找第一个有 API key 的 provider 的默认模型。
@@ -531,7 +540,7 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解 skill 的发现、验证和调用机制。
 
-> **源码对照**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L147
+> **源码对照**: `packages/coding-agent/src/core/skills.ts` — `loadSkillsFromDir`
 
 **场景**: 创建一个 `code-review` skill。
 
@@ -570,7 +579,7 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解全局和项目级配置的合并行为。
 
-> **源码对照**: `packages/coding-agent/src/core/settings-manager.ts` — deepMergeSettings L100
+> **源码对照**: `packages/coding-agent/src/core/settings-manager.ts` — `deepMergeSettings`
 
 **场景**:
 ```json
@@ -600,14 +609,14 @@ export default function (pi: ExtensionAPI) {
 
 **目标**: 理解不同 Provider 实现 prompt cache 的方式差异。
 
-> **源码对照**: `packages/ai/src/providers/anthropic.ts` — getCacheControl L49
+> **源码对照**: `packages/ai/src/providers/anthropic.ts` — `getCacheControl`
 
 **验证问题**:
 - Q: Anthropic 和 OpenAI 的缓存机制有什么根本区别？
 - A: Anthropic 使用 `cache_control` 标记特定消息块作为缓存断点。OpenAI 使用 `prompt_cache_key`（session 级别）让相同前缀的消息自动缓存。Anthropic 更精细（块级），OpenAI 更粗放（session 级）。
 
 - Q: `CacheRetention` 的 `"short"` 和 `"long"` 有什么区别？
-- A: 取决于 Provider。Anthropic 中 short 使用 `ephemeral`（约 5 分钟），long 使用 `persistent`（付费持久化）。Bedrock 中 long 使用 `TTL: ONE_HOUR`。
+- A: 取决于 Provider。Anthropic 中 short 使用 `ephemeral`（约 5 分钟），long 仍是 `ephemeral`，但会附带 `ttl: "1h"`（仅官方 API 生效）。Bedrock 中 long 使用 `TTL: ONE_HOUR`。
 
 - Q: 用户如何通过环境变量启用持久缓存？
 - A: 设置 `PI_CACHE_RETENTION=long`。所有 Provider 的 `resolveCacheRetention()` 都会检查这个环境变量。

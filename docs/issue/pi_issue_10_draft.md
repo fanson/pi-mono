@@ -18,7 +18,7 @@ The bash tool's `timeout` parameter is optional with no default. If the model do
 
 **What happens:**
 
-`bash.ts` line 27-29 defines timeout as optional with no default:
+`packages/coding-agent/src/core/tools/bash.ts` lines 33-35 define timeout as optional with no default:
 ```typescript
 const bashSchema = Type.Object({
     command: Type.String({ description: "Bash command to execute" }),
@@ -26,7 +26,7 @@ const bashSchema = Type.Object({
 });
 ```
 
-The timeout mechanism exists and works correctly when provided (lines 87-91):
+The timeout mechanism exists and works correctly when provided (lines 93-99):
 ```typescript
 if (timeout !== undefined && timeout > 0) {
     timeoutHandle = setTimeout(() => {
@@ -51,12 +51,12 @@ The user sees the session freeze with no feedback. The only recovery is killing 
 
 **Expected behavior:**
 
-A reasonable default timeout (e.g. 10 minutes) that kills the process and returns a timeout error, while still allowing the model to pass a custom `timeout` when needed.
+A reasonable default timeout (e.g. 30 minutes) that kills the process and returns a timeout error, while still allowing the model to pass a custom `timeout` when needed.
 
 **Suggested fix:**
 
 ```typescript
-const DEFAULT_TIMEOUT_SECONDS = 600; // 10 minutes
+const DEFAULT_TIMEOUT_SECONDS = 1800; // 30 minutes
 
 // In the execute function:
 const effectiveTimeout = timeout ?? DEFAULT_TIMEOUT_SECONDS;

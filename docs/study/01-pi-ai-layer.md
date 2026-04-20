@@ -10,7 +10,7 @@
 | 文件 | 作用 |
 |------|------|
 | `src/types.ts` | 所有类型定义：Message、Tool、Context、Model、Events |
-| `src/stream.ts` | `streamSimple()`、`complete()` — 公共入口 |
+| `src/stream.ts` | `stream()` / `complete()` 与 `streamSimple()` / `completeSimple()` — 公共入口 |
 | `src/utils/event-stream.ts` | `EventStream<T, R>` — 推送式异步迭代器 |
 | `src/utils/overflow.ts` | 上下文溢出检测（多 Provider 错误模式匹配） |
 | `src/utils/validation.ts` | 工具参数 AJV 验证（含运行时降级） |
@@ -22,7 +22,7 @@
 
 ## 核心类型 (src/types.ts)
 
-> **源码对照**: `packages/ai/src/types.ts` — Message L213, Usage L167-180, Model L314, CacheRetention L56, AssistantMessageEvent L237
+> **源码对照**: `packages/ai/src/types.ts` — `Message`、`Usage`、`Model`、`CacheRetention`、`AssistantMessageEvent`
 
 ### 消息类型
 
@@ -112,9 +112,12 @@ interface Model<TApi extends Api> {
   provider: Provider  // 如 "anthropic"
   baseUrl: string     // API 端点
   reasoning: boolean  // 是否支持推理
+  input: ("text" | "image")[]  // 支持的输入模态
   contextWindow: number
   maxTokens: number
   cost: { input, output, cacheRead, cacheWrite }  // $/百万 token
+  headers?: Record<string, string>  // 可选的 provider 级请求头
+  compat?: unknown                  // OpenAI 兼容层的可选兼容配置
 }
 
 interface Context {
@@ -126,7 +129,7 @@ interface Context {
 
 ## EventStream (src/utils/event-stream.ts)
 
-> **源码对照**: `packages/ai/src/utils/event-stream.ts` — EventStream 类 L4
+> **源码对照**: `packages/ai/src/utils/event-stream.ts` — `EventStream`
 
 pi-mono 所有流式操作的骨干。推送式异步迭代器，带最终结果 Promise。
 
@@ -164,7 +167,7 @@ push(event) 被调用时:
 
 ## streamSimple() 流程 (src/stream.ts)
 
-> **源码对照**: `packages/ai/src/stream.ts` — streamSimple L43
+> **源码对照**: `packages/ai/src/stream.ts` — `streamSimple`
 
 ```typescript
 export function streamSimple<TApi extends Api>(
@@ -181,7 +184,7 @@ export function streamSimple<TApi extends Api>(
 
 ## Provider 实现模式
 
-> **源码对照**: `packages/ai/src/providers/anthropic.ts` — streamAnthropic L199, streamSimpleAnthropic L477
+> **源码对照**: `packages/ai/src/providers/anthropic.ts` — `streamAnthropic`、`streamSimpleAnthropic`
 
 每个 Provider 遵循相同模式（以 Anthropic 为例）：
 
@@ -316,7 +319,7 @@ Bedrock 仅对识别出的 Claude 模型启用缓存。对于 Application Infere
 
 每个 Provider 内部都有相同的 `resolveCacheRetention()` 函数：
 
-> **源码对照**: `packages/ai/src/providers/anthropic.ts` — resolveCacheRetention L39, getCacheControl L49, buildParams L607, convertMessages L702
+> **源码对照**: `packages/ai/src/providers/anthropic.ts` — `resolveCacheRetention`、`getCacheControl`、`buildParams`、`convertMessages`
 
 ```typescript
 function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
@@ -350,16 +353,16 @@ interface Usage {
 }
 ```
 
-`Model` 定义中也包含每百万 token 的缓存单价：
+`Model` 定义中的 `cost` 字段也包含每百万 token 的缓存单价：
 
 ```typescript
-interface Model {
-  cost: {
-    input: number       // $/百万 token
-    output: number
-    cacheRead: number   // 通常远低于 input
-    cacheWrite: number  // 通常略高于 input
-  }
+type ModelCost = Model["cost"]
+
+const cost: ModelCost = {
+  input: number       // $/百万 token
+  output: number
+  cacheRead: number   // 通常远低于 input
+  cacheWrite: number  // 通常略高于 input
 }
 ```
 
@@ -497,7 +500,7 @@ OpenAI Responses 共享层：外部 `function_call` ID 被哈希为 `fc_<hash>` 
 
 ## 模型注册表 (src/models.ts)
 
-> **源码对照**: `packages/ai/src/models.ts` — getModel L20, getProviders L28, calculateCost L39
+> **源码对照**: `packages/ai/src/models.ts` — `getModel`、`getProviders`、`calculateCost`
 
 模型由 `scripts/generate-models.ts` 从 provider API 生成到 `models.generated.ts`。
 模块加载时存入两级 Map：

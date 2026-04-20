@@ -2,7 +2,7 @@
 
 > 源码对照:
 > - Claude Code: `src/services/compact/` (11 files, ~4000 LOC)
-> - Pi: `packages/coding-agent/src/core/compaction/` (2 files, ~830 LOC)
+> - Pi: `packages/coding-agent/src/core/compaction/`（4 files: `compaction.ts`、`branch-summarization.ts`、`utils.ts`、`index.ts`）
 
 ## 架构总览
 
@@ -39,25 +39,26 @@ API 调用前管线 (query.ts 中每次请求前执行):
 ### Pi: 单层压缩
 
 ```
-AgentSession.steer() 中检测:
+自动压缩由 `AgentSession._checkCompaction()` 负责（在 `agent_end` 后或发送新用户消息前调用）:
 ┌──────────────────────────────────────────────────────────────────────┐
 │ shouldCompact(contextTokens, contextWindow, settings)?               │
 │    │                                                                 │
-│    ├── session_before_compact 事件 → 扩展可取消/自定义                │
-│    │                                                                 │
-│    ├── prepareCompaction()                                           │
-│    │   ├── 找上一次 compaction 位置                                   │
-│    │   ├── findCutPoint() → 保留 keepRecentTokens                    │
-│    │   ├── 分割 messagesToSummarize / turnPrefixMessages              │
-│    │   └── extractFileOperations()                                   │
-│    │                                                                 │
-│    ├── compact()                                                     │
-│    │   ├── generateSummary() → LLM 调用 (completeSimple)             │
-│    │   ├── generateTurnPrefixSummary() (并行, 如果 split turn)        │
-│    │   └── formatFileOperations() → 追加到 summary                   │
-│    │                                                                 │
-│    └── SessionManager.appendCompaction()                             │
-│        └── 追加 compaction 条目, 保留旧消息但不再发给 LLM             │
+│    └── AgentSession.compact()                                        │
+│         ├── session_before_compact 事件 → 扩展可取消/自定义            │
+│         │                                                             │
+│         ├── prepareCompaction()                                       │
+│         │   ├── 找上一次 compaction 位置                               │
+│         │   ├── findCutPoint() → 保留 keepRecentTokens                │
+│         │   ├── 分割 messagesToSummarize / turnPrefixMessages          │
+│         │   └── extractFileOperations()                               │
+│         │                                                             │
+│         ├── compact()                                                 │
+│         │   ├── generateSummary() → LLM 调用 (`await completeSimple`) │
+│         │   ├── generateTurnPrefixSummary() (并行, 如果 split turn)    │
+│         │   └── formatFileOperations() → 追加到 summary               │
+│         │                                                             │
+│         └── SessionManager.appendCompaction()                         │
+│             └── 追加 compaction 条目, 保留旧消息但不再发给 LLM         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -68,7 +69,7 @@ AgentSession.steer() 中检测:
 | 维度 | Claude Code | Pi |
 |------|------------|-----|
 | **自动触发条件** | `tokens > contextWindow - maxOutput(20K) - 13K` | `tokens > contextWindow - reserveTokens(16K)` |
-| **手动触发** | `/compact` 命令 (3K buffer) | `session_before_compact` 事件 |
+| **手动触发** | `/compact` 命令 (3K buffer) | `/compact`、`AgentSession.compact()`、RPC `compact` |
 | **MicroCompact 触发** | 每次 API 调用前; time-based + count-based | 无 |
 | **熔断器** | 3 次连续失败后停止自动压缩 | 无 |
 | **递归守卫** | `querySource` 为 `session_memory`/`compact`/`marble_origami` 时跳过 | 无 (单层无递归风险) |
@@ -106,12 +107,12 @@ Pi 的阈值实际上更接近上限 — 没有额外的 buffer layer。
 |------|------------|-----|
 | **基础算法** | `roughTokenCountEstimation()` — chars/4 | `estimateTokens()` — chars/4 |
 | **填充系数** | MicroCompact 用 4/3 倍保守填充 | 无填充 |
-| **图片/PDF** | 固定 2000 tokens | 固定 4800 chars (~1200 tokens) |
+| **图片 / 非文本附件估算** | 固定 2000 tokens | `image` block 固定 +4800 chars（PDF 在这条估算路径里没有单独分支） |
 | **实际用量参考** | `tokenCountWithEstimation()` — 优先使用 API 返回的 `usage`, 回退估算 | `estimateContextTokens()` — 优先使用最后一个 assistant message 的 usage, 回退估算 |
-| **thinking block** | 计算 thinking text, 不计 signature/wrapper | N/A (Pi 不处理 thinking blocks) |
+| **thinking block** | 计算 thinking text, 不计 signature/wrapper | `estimateTokens()` 会把 `thinking` 文本长度计入估算 |
 
 两者都采用类似策略: 优先用 API 返回的实际 token 数, 对于尚未发送的消息用启发式估算。
-Pi 对图片使用更高的字符估算 (4800 chars) 但实际转为 token 后约 1200, 接近 Claude Code 的 2000。
+Pi 对图片使用更高的字符估算（4800 chars，折合约 1200 tokens）；这条逻辑针对 `image` block，本身不等于“Pi 对 PDF 也有同样的专门估算分支”。
 
 ### 3. 切割点算法
 
@@ -220,18 +221,18 @@ Split turn 处理:
 
 预处理:
   - convertToLlm() + serializeConversation(): 转为纯文本
-  - 无图片预处理
+  - 图片不会作为原始附件继续传给总结模型；`serializeConversation` 只保留可序列化的文本内容
 ```
 
 **关键差异**:
 
 | 维度 | Claude Code | Pi |
 |------|------------|-----|
-| **执行方式** | forked agent (独立进程) | completeSimple (同步调用) |
+| **执行方式** | forked agent (独立进程) | `await completeSimple(...)`（非流式单次调用） |
 | **草稿剥离** | `<analysis>` + `<summary>` 两段式 | 无草稿段 |
 | **摘要详细度** | 9 个分节, 含代码片段和原文引用 | 6 个分节, 更简洁 |
 | **PTL 恢复** | 3 次重试, 渐进截断 | 无 PTL 恢复 |
-| **图片处理** | 替换为 [image] | 不预处理 |
+| **图片处理** | 替换为 [image] | 不做 Claude 那种占位符替换；总结输入里只保留序列化后的文本内容 |
 | **Cache 复用** | forked agent 复用主对话 cache prefix | 无 cache 复用 |
 
 ### 5. MicroCompact (Claude Code 独有)
@@ -530,7 +531,7 @@ Pi 的 compact 后没有显式的缓存清理步骤。compact 通过修改 sessi
 ```
                     Claude Code                      Pi
                     ───────────                      ──
-复杂度              11 files, ~4000 LOC              2 files, ~830 LOC
+复杂度              11 files, ~4000 LOC              4 files（含 branch summary 辅助模块）
 层次                4 层 (MC → Snip → AC → CC)       1 层 (Full Compact)
 MicroCompact        ✔ (time-based + cached MC)       ✘
 Session Memory      ✔ (无 LLM, 即时)                 ✘
@@ -551,7 +552,7 @@ Provider 锁定       ✔ (cache_edits 限 Anthropic)      ✘ (provider 中立)
 
 ### 适合纳入核心
 
-1. **熔断器** (低难度, 高价值): 在 `steer()` 中添加连续压缩失败计数, 3 次后停止自动触发。防止无限循环。
+1. **熔断器** (低难度, 高价值): 在 `_checkCompaction()` / 自动压缩路径中添加连续压缩失败计数, 3 次后停止自动触发。防止无限循环。
 2. **PTL 恢复** (中难度, 高价值): `generateSummary()` 中如果 LLM 报 prompt_too_long, 截断最旧消息后重试。
 3. **token 估算填充** (低难度, 中价值): `estimateTokens()` 结果乘 4/3, 减少因低估导致的意外 overflow。
 

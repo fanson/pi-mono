@@ -14,7 +14,7 @@
 ├─────────────────────────────────────────────────────────┤
 │                   pi-ai（第一层）                         │
 │  统一 LLM API、流式传输、模型、Provider                    │
-│  无内部依赖                                               │
+│  不依赖 monorepo 上层包（仅使用外部 npm 依赖）             │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -55,7 +55,7 @@ runAgentLoop(prompts, context, config, emit, signal)
     │   │   │                                          │     │
     │   │   │  1. 注入待处理的 steering 消息            │     │
     │   │   │  2. streamAssistantResponse()             │     │
-    │   │   │     ├── transformContext(AgentMessage[])   │     │
+    │   │   │     ├── transformContext(AgentMessage[], signal) │     │
     │   │   │     │   应用上下文变换（裁剪、注入）         │     │
     │   │   │     ├── convertToLlm(AgentMessage[])      │     │
     │   │   │     │   把自定义消息转为 LLM 格式           │     │
@@ -104,8 +104,9 @@ coding-agent 通过声明合并添加:
 
 **关键洞察**: `AgentMessage` 在整个 agent 循环中流转，包含各种自定义类型。
 但 LLM 只认识 `user`、`assistant`、`toolResult` 三种角色。所以在调用 LLM 前，
-必须通过 `convertToLlm()` 把自定义类型映射为 LLM 能理解的格式。这个转换只发生一次，
-就在 `streamAssistantResponse()` 内部。
+必须通过 `convertToLlm()` 把自定义类型映射为 LLM 能理解的格式。**主调用边界**在
+`streamAssistantResponse()` 内部（每次 assistant turn 前都会做一次），但 compaction /
+summary 这些辅助路径也会复用同一套转换逻辑。
 
 ## 事件系统
 
@@ -148,7 +149,7 @@ Agent 事件 (agent-core 层):
                ┌─────────────▼──────────────┐
                │    prepareToolCall()        │
                │  1. 按名称查找工具            │
-               │  2. 验证参数 (TypeBox schema) │
+               │  2. AJV 校验参数（基于 TypeBox schema） │
                │  3. beforeToolCall 钩子      │
                │     → 返回 block? → 错误结果  │
                └─────────────┬──────────────┘
@@ -195,7 +196,7 @@ Agent 事件 (agent-core 层):
 用户调用: streamSimple(model, context, options)
     │
     ▼
-stream.ts: getApiProvider(model.api)  // 从注册表查找
+stream.ts: resolveApiProvider(model.api)  // 内部走 getApiProvider，未注册则抛错
     │
     ▼
 懒加载包装器:

@@ -19,7 +19,7 @@ When a bash command exits with a non-zero code, the tool always `reject`s with a
 
 **What happens:**
 
-`bash.ts` line 360-362:
+`packages/coding-agent/src/core/tools/bash.ts` lines 379-381:
 ```typescript
 if (exitCode !== 0 && exitCode !== null) {
     outputText += `\n\nCommand exited with code ${exitCode}`;
@@ -27,7 +27,7 @@ if (exitCode !== 0 && exitCode !== null) {
 }
 ```
 
-This `reject` flows to `agent-loop.ts` `executePreparedToolCall` catch block (line 552-557):
+This `reject` flows to `packages/agent/src/agent-loop.ts` `executePreparedToolCall` catch block (lines 555-559):
 ```typescript
 } catch (error) {
     return {

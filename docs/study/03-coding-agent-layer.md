@@ -17,7 +17,7 @@
 | `src/modes/print-mode.ts` | 单次执行模式：`pi -p "prompt"` |
 | `src/core/sdk.ts` | `createAgentSession()` — 编程式入口 |
 | `src/core/agent-session.ts` | 会话编排器：钩子、事件、持久化 |
-| `src/core/agent-session-runtime.ts` | **AgentSessionRuntimeHost** — 管理 session 切换 (/new, /resume, /fork) |
+| `src/core/agent-session-runtime.ts` | **AgentSessionRuntime** — 管理 session 切换 (/new, /resume, /fork) |
 | `src/core/messages.ts` | 自定义消息类型 + `convertToLlm()` |
 | `src/core/system-prompt.ts` | 系统提示词构建 |
 | `src/core/tools/` | 7 个工具：edit, bash, read, write, grep, find, ls |
@@ -40,7 +40,7 @@
 
 `main()` 是 pi 命令的入口函数。
 
-> **源码**: `packages/coding-agent/src/main.ts` — main() L663
+> **源码**: `packages/coding-agent/src/main.ts` — `main()`
 
 启动流程：
 
@@ -53,17 +53,18 @@ main(args)
   2. 早期命令处理:
      └── pi install/remove/update/list → 包管理命令，执行后退出
      └── pi config → 配置选择器，执行后退出
-  3. 运行迁移（auth、sessions 格式升级）
-  4. 第一次参数解析: parseArgs(args) → 获取 --extension 路径
-  5. 加载资源: DefaultResourceLoader
-     └── 扩展、skills、prompts、themes
-     └── 注册扩展提供的 Provider
-  6. 第二次参数解析: parseArgs(args, extensionFlags) → 含扩展标志
-  7. 短路退出: --version / --help / --list-models / --export
-  8. 读取 stdin（非 RPC 模式；如有管道输入则强制 print 模式）
-  9. 创建 SessionManager（新建/继续/fork/恢复）
-  10. buildSessionOptions() → 构建 CreateAgentSessionOptions
-  11. createAgentSession(options) → 返回 AgentSession
+  3. `parseArgs(args)` 一次解析所有核心 CLI 参数
+  4. 解析 app mode，处理 `--version` / `--export` / fork 参数校验
+  5. 运行迁移（auth、sessions 格式升级）
+  6. 创建或打开 SessionManager（新建/继续/fork/恢复）
+  7. 创建运行时:
+     └── SettingsManager / ModelRegistry / ResourceLoader / AuthStorage
+     └── 加载扩展、skills、prompts、themes
+     └── 把 `parsed.unknownFlags` 作为扩展 CLI 标志值传入运行时
+  8. `createAgentSession(...)` → 返回 `{ session, extensionsResult, modelFallbackMessage }`
+  9. 运行时准备好后再处理 `--help` / `--list-models`
+  10. 读取 stdin（非 RPC 模式；如有管道输入则把 interactive 降级为 print）
+  11. 准备初始消息、初始化主题、报告诊断
   12. 选择运行模式:
       ├── mode === "rpc"    → runRpcMode(session)
       ├── print 模式        → runPrintMode(session, ...)
@@ -72,7 +73,7 @@ main(args)
 
 ### CLI 参数 (src/cli/args.ts)
 
-> **源码**: `packages/coding-agent/src/cli/args.ts` — parseArgs L56
+> **源码**: `packages/coding-agent/src/cli/args.ts` — `parseArgs`
 
 | 参数组 | 示例 | 用途 |
 |---|---|---|
@@ -84,14 +85,14 @@ main(args)
 | 思考 | `--thinking high` | Thinking level |
 | 文件 | `@file.ts` | 附加文件到初始消息 |
 
-**两次解析模式**: 第一次解析获取 `--extension` 路径，加载扩展后注册扩展标志，
-第二次解析才能识别扩展定义的自定义 CLI 标志。
+**当前模式**: 核心参数只解析一次；扩展自定义 CLI 标志不会重新走 `parseArgs()`，
+而是保存在 `parsed.unknownFlags`，由运行时在加载扩展后按注册的 flag 定义解释。
 
 ## 三种运行模式
 
 ### Interactive 模式（默认）
 
-> **源码**: `packages/coding-agent/src/modes/interactive/interactive-mode.ts` — InteractiveMode L147
+> **源码**: `packages/coding-agent/src/modes/interactive/interactive-mode.ts` — `InteractiveMode`
 
 `InteractiveMode` 基于 `@mariozechner/pi-tui` 提供完整的终端 UI：
 
@@ -123,7 +124,7 @@ session 切换、主题、扩展 UI 组件。
 
 ### Print 模式（单次执行）
 
-> **源码**: `packages/coding-agent/src/modes/print-mode.ts` — runPrintMode L31
+> **源码**: `packages/coding-agent/src/modes/print-mode.ts` — `runPrintMode`
 
 `pi -p "fix the bug"` 或管道输入时使用。
 
@@ -140,7 +141,7 @@ runPrintMode(session, options):
 
 ### RPC 模式
 
-> **源码**: `packages/coding-agent/src/modes/rpc/rpc-mode.ts` — runRpcMode L46
+> **源码**: `packages/coding-agent/src/modes/rpc/rpc-mode.ts` — `runRpcMode`
 
 `pi --mode rpc` 启动无头模式，通过 JSON Lines 在 stdin/stdout 上通信。
 
@@ -189,7 +190,7 @@ AgentSession 把所有组件连接在一起：
 
 ### 构建流程
 
-> **源码**: `packages/coding-agent/src/core/sdk.ts` — createAgentSession L174
+> **源码**: `packages/coding-agent/src/core/sdk.ts` — `createAgentSession`
 
 ```
 createAgentSession(options)                  ← sdk.ts
@@ -207,6 +208,8 @@ createAgentSession(options)                  ← sdk.ts
        → 创建 ExtensionRunner
        → 绑定钩子（beforeToolCall → emitToolCall, afterToolCall → emitToolResult）
        → 构建系统提示词
+  5. 返回 `CreateAgentSessionResult`
+     → `{ session, extensionsResult, modelFallbackMessage }`
 ```
 
 **注意**: Agent 实例由 `createAgentSession()` (在 `sdk.ts` 中) 创建并传给 AgentSession，
@@ -214,7 +217,7 @@ AgentSession 本身不负责 Agent 的构建。
 
 ### 钩子桥接
 
-> **源码**: `packages/coding-agent/src/core/agent-session.ts` — AgentSession L232, steer L1138, _buildRuntime L318
+> **源码**: `packages/coding-agent/src/core/agent-session.ts` — `AgentSession`、`steer`、`_buildRuntime`
 
 AgentSession 把 agent-core 的钩子桥接到扩展系统：
 
@@ -257,7 +260,7 @@ declare module "@mariozechner/pi-agent-core" {
 
 ### convertToLlm 映射
 
-> **源码**: `packages/coding-agent/src/core/messages.ts` — convertToLlm L148
+> **源码**: `packages/coding-agent/src/core/messages.ts` — `convertToLlm`
 
 | 自定义类型 | → LLM 消息 |
 |---|---|
@@ -272,7 +275,7 @@ declare module "@mariozechner/pi-agent-core" {
 
 ### 默认工具集
 
-> **源码**: `packages/coding-agent/src/core/tools/index.ts` — createCodingToolDefinitions L140, createCodingTools L170, createAllTools L183
+> **源码**: `packages/coding-agent/src/core/tools/index.ts` — `createCodingToolDefinitions`、`createCodingTools`、`createAllTools`
 
 ```typescript
 createCodingTools(cwd) 返回:
@@ -384,7 +387,7 @@ flushRawStdout()     // 刷新 stdout 缓冲
 
 ## 模型解析 (src/core/model-resolver.ts)
 
-> **源码**: `packages/coding-agent/src/core/model-resolver.ts` — resolveCliModel L328, defaultModelPerProvider L14
+> **源码**: `packages/coding-agent/src/core/model-resolver.ts` — `resolveCliModel`、`defaultModelPerProvider`
 
 `model-resolver.ts` 负责确定 agent 使用哪个 LLM 模型。
 
@@ -402,12 +405,12 @@ const defaultModelPerProvider: Record<string, string> = {
 ### 解析流程
 
 ```
-用户输入: "anthropic:claude-sonnet-4" 或 "sonnet" 或 无指定
+用户输入: "anthropic/claude-sonnet-4" 或 "sonnet" 或 无指定
        │
        ▼
 resolveCliModel(input)
-  1. parseModelPattern(input)        // 解析 "provider:model" 或 "alias"
-  2. findExactModelReferenceMatch()  // 精确匹配 provider + model ID
+  1. parseModelPattern(input)        // 解析 "provider/model[:thinking]" 或 alias
+  2. findExactModelReferenceMatch()  // 精确匹配 canonical provider/model 引用
   3. resolveModelScope()             // 在所有 provider 中搜索
        │
        ▼
@@ -417,12 +420,13 @@ findInitialModel()
 
 ### 与 Thinking Level 的交互
 
-模型指定时可以附带 thinking level：`"anthropic:claude-sonnet-4:high"`。
-`parseModelPattern()` 将其解析为 `{ provider, modelId, thinkingLevel }`。
+模型指定时可以附带 thinking level：`"anthropic/claude-sonnet-4:high"`。
+`parseModelPattern()` 返回的是 `{ model, thinkingLevel, warning }`；其中 `model`
+已经是解析好的 `Model<Api>`。
 
 ## 系统提示词构建
 
-> **源码**: `packages/coding-agent/src/core/system-prompt.ts` — buildSystemPrompt L28
+> **源码**: `packages/coding-agent/src/core/system-prompt.ts` — `buildSystemPrompt`
 
 系统提示词按以下顺序组装：
 
@@ -465,13 +469,13 @@ BuildSystemPromptOptions:
 
 ## 扩展系统
 
-> **源码**: `packages/coding-agent/src/core/extensions/` — types.ts (ExtensionAPI L988), runner.ts (ExtensionRunner L202), loader.ts（详见 [06-extension-system-deep-dive.md](06-extension-system-deep-dive.md)）
+> **源码**: `packages/coding-agent/src/core/extensions/` — `types.ts` (`ExtensionAPI`, `ExtensionEvent`), `runner.ts` (`ExtensionRunner`), `loader.ts`（详见 [07-extension-system-deep-dive.md](07-extension-system-deep-dive.md)）
 
 ### 加载路径
 
-- `~/.pi/agent/extensions/*.ts` 或 `~/.pi/agent/extensions/*/index.ts`（全局）
-- `.pi/extensions/*.ts` 或 `.pi/extensions/*/index.ts`（项目级）
-- settings 中配置的额外路径
+- CLI `--extension ...` 指定的路径会最先进入加载序列
+- 其后才是已启用的扩展路径（来源于项目级 `.pi/extensions/**`、全局 `~/.pi/agent/extensions/**`、以及 settings / package 解析出的额外路径）
+- 最终冲突处理遵循加载顺序；CLI 不是“又一层来源”，而是最先合并进列表的 primary paths
 
 用 `jiti` 加载（不需要构建步骤）。
 
@@ -483,7 +487,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({ name: "my-tool", ... })
 
   // 注册命令
-  pi.registerCommand("mycommand", async (ctx) => { ... })
+  pi.registerCommand("mycommand", {
+    description: "Do something",
+    handler: async (args: string, ctx: ExtensionCommandContext) => { ... },
+  })
 
   // 拦截事件
   pi.on("tool_call", async (event, ctx) => {
@@ -527,7 +534,7 @@ export default function (pi: ExtensionAPI) {
 
 ## 上下文压缩
 
-> **源码**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact L715, findCutPoint L386, generateSummary L530（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
+> **源码**: `packages/coding-agent/src/core/compaction/compaction.ts` — `compact`、`findCutPoint`、`generateSummary`（详见 [08-compaction-and-sessions.md](08-compaction-and-sessions.md)）
 
 当对话超出模型的上下文窗口时：
 
@@ -549,7 +556,7 @@ export default function (pi: ExtensionAPI) {
 
 ## 会话管理
 
-> **源码**: `packages/coding-agent/src/core/session-manager.ts` — SessionManager L664, appendMessage L829, getBranch L1029, branch L1120（详见 [07-compaction-and-sessions.md](07-compaction-and-sessions.md)）
+> **源码**: `packages/coding-agent/src/core/session-manager.ts` — `SessionManager`、`appendMessage`、`getBranch`、`branch`（详见 [08-compaction-and-sessions.md](08-compaction-and-sessions.md)）
 
 会话以条目树（不是线性数组）存储：
 
@@ -575,7 +582,7 @@ SessionEntry = {
 
 ## Settings 管理 (src/core/settings-manager.ts)
 
-> **源码**: `packages/coding-agent/src/core/settings-manager.ts` — Settings L63, deepMergeSettings L101, SettingsManager L226
+> **源码**: `packages/coding-agent/src/core/settings-manager.ts` — `Settings`、`deepMergeSettings`、`SettingsManager`
 
 配置系统使用全局 + 项目两级覆盖：
 
@@ -639,7 +646,7 @@ interface Settings {
 
 ## Resource Loading (src/core/resource-loader.ts)
 
-> **源码**: `packages/coding-agent/src/core/resource-loader.ts` — DefaultResourceLoader L150
+> **源码**: `packages/coding-agent/src/core/resource-loader.ts` — `DefaultResourceLoader`
 
 统一管理所有可加载资源的生命周期：
 
@@ -647,14 +654,15 @@ interface Settings {
 DefaultResourceLoader.reload()
   1. packageManager.resolve()     ← 从 settings 解析包路径
   2. resolveExtensionSources()    ← 解析 CLI 指定的扩展（标记为 temporary）
-  3. 合并路径: 包 + CLI + settings 中的额外路径
+  3. 合并扩展路径: CLI primary paths + enabledExtensions
   4. loadExtensions()             ← 加载扩展（jiti），附加 sourceInfo
-  5. updateSkillsFromPaths()      ← 加载 skills，附加 sourceInfo
-  6. updatePromptsFromPaths()     ← 加载 prompt 模板，附加 sourceInfo
-  7. updateThemesFromPaths()      ← 加载主题，附加 sourceInfo
-  8. getAgentsFiles()             ← 发现 AGENTS.md / CLAUDE.md（agent 目录 + 祖先目录遍历）
-  9. 解析系统提示词覆盖
-  10. 冲突检测: 重复工具名 / 重复标志
+  5. loadExtensionFactories()     ← 加载内联 extension factories
+  6. detectExtensionConflicts()   ← 检查重复工具名 / 命令 / 标志
+  7. updateSkillsFromPaths()      ← 加载 skills，附加 sourceInfo
+  8. updatePromptsFromPaths()     ← 加载 prompt 模板，附加 sourceInfo
+  9. updateThemesFromPaths()      ← 加载主题，附加 sourceInfo
+  10. getAgentsFiles()            ← 发现 AGENTS.md / CLAUDE.md（agent 目录 + 祖先目录遍历）
+  11. 解析系统提示词覆盖
 ```
 
 ### 资源类型
@@ -679,7 +687,7 @@ DefaultResourceLoader.reload()
 
 ## Auth Storage (src/core/auth-storage.ts)
 
-> **源码**: `packages/coding-agent/src/core/auth-storage.ts` — AuthStorage L184, FileAuthStorageBackend L45
+> **源码**: `packages/coding-agent/src/core/auth-storage.ts` — `AuthStorage`、`FileAuthStorageBackend`
 
 API 密钥和 OAuth 凭证的安全存储。
 
@@ -727,7 +735,7 @@ API key 优先级：**runtime > file > env > fallback**
 
 ## Model Registry (src/core/model-registry.ts)
 
-> **源码**: `packages/coding-agent/src/core/model-registry.ts` — ModelRegistry L255
+> **源码**: `packages/coding-agent/src/core/model-registry.ts` — `ModelRegistry`
 
 管理内置模型和用户自定义模型/Provider。
 
@@ -770,7 +778,7 @@ OAuth Provider 可通过 `modifyModels` 回调修改模型列表。
 
 ### Provider 注册
 
-扩展可以通过 `registerApiProvider()` 注册新的 LLM Provider，
+扩展可以通过 `pi.registerProvider()` 注册新的 LLM Provider，
 注册后该 Provider 的模型立即可用。
 
 ### API Key 解析
@@ -784,7 +792,7 @@ OAuth Provider 可通过 `modifyModels` 回调修改模型列表。
 
 ## Skills 系统 (src/core/skills.ts)
 
-> **源码**: `packages/coding-agent/src/core/skills.ts` — loadSkillsFromDir L172, loadSkills L404
+> **源码**: `packages/coding-agent/src/core/skills.ts` — `loadSkillsFromDir`、`loadSkills`
 
 Skills 是给模型提供专业知识的 Markdown 文件。每个 Skill 现在携带 `sourceInfo`。
 
@@ -832,7 +840,7 @@ disable-model-invocation: false
 
 ## Package Manager (src/core/package-manager.ts)
 
-> **源码**: `packages/coding-agent/src/core/package-manager.ts` — DefaultPackageManager L681
+> **源码**: `packages/coding-agent/src/core/package-manager.ts` — `DefaultPackageManager`
 
 管理扩展、skills、prompts、themes 的安装和更新。
 

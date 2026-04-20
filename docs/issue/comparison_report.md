@@ -139,7 +139,7 @@
 | **消息注入** | 系统级（system prompt + user context） | 运行时注入（steering + follow-up 队列） |
 | **错误恢复** | 内置多策略（PTL恢复、模型回退、max_output升级） | 外置于 AgentSession（auto-retry + backoff） |
 | **回退模型** | 循环内 FallbackTriggeredError → 切换模型 | 无内置回退 |
-| **Token 预算** | 一等公民（taskBudget 跨压缩持续跟踪） | 无内置 token 预算管理 |
+| **Token 预算** | 一等公民（taskBudget 跨压缩持续跟踪） | 无 Claude 式 taskBudget，但 compaction 仍基于 token 估算/阈值触发 |
 
 ---
 
@@ -185,7 +185,7 @@
 
 **单一路径 — `executeToolCalls()`（agent-loop.ts）**
 
-配置驱动：`config.toolExecution === "sequential"` 决定模式
+模式只由 `config.toolExecution` 决定：`"sequential"` 或 `"parallel"`
 
 **顺序模式：** 严格 `for` 循环，一个接一个
 
@@ -193,6 +193,10 @@
 1. 预处理阶段（顺序）：所有工具调用依次经过 `prepareToolCall` + `validateToolArguments` + `beforeToolCall`
 2. 执行阶段（并行）：`Promise` map 并行执行所有已准备的工具
 3. 终结阶段（顺序）：按原始顺序执行 `afterToolCall` + 事件发射
+
+**限制：**
+- 还没有 Claude Code 那种按 `isConcurrencySafe` 把同一批工具切成多个并行/串行子批次的能力
+- 因此 Pi 的粒度就是“整批顺序”或“整批并行”
 
 **关键差异：**
 
@@ -293,7 +297,7 @@ taskBudgetRemaining -= finalContextTokensFromLastResponse(messagesForQuery)
 ### Pi Mono: 外置式压缩
 
 压缩不在 `agentLoop` 内部，而是在 `AgentSession._checkCompaction` 中：
-- 检查时机：`agent_end` 事件时
+- 检查时机：`agent_end` 之后，以及发送新用户消息前（用于覆盖 aborted / overflow / threshold 场景）
 - 使用 `transformContext` 可选钩子（在每次 LLM 调用前）
 - 会话级别的压缩条目记录在 `SessionManager` 中
 
@@ -301,13 +305,13 @@ taskBudgetRemaining -= finalContextTokensFromLastResponse(messagesForQuery)
 
 | 维度 | Claude Code | Pi Mono |
 |------|-------------|---------|
-| **压缩策略数** | 5种（snip, micro, collapse, auto, reactive） | 1种（会话级检查） |
+| **压缩策略数** | 5种（snip, micro, collapse, auto, reactive） | 1 条主压缩管线（threshold / overflow 共用 `_checkCompaction` + `_runAutoCompaction`） |
 | **触发位置** | 循环内置 | 循环外（AgentSession 事件处理） |
 | **分叉代理** | 用独立代理生成摘要 | 无 |
-| **PTL 恢复** | 内置多次重试 + 头部截断 | 无 |
+| **PTL 恢复** | 内置多次重试 + 头部截断 | 有基础 overflow 恢复（压缩 + 单次自动重试），但没有 Claude 那种多轮 PTL 流程 |
 | **缓存感知** | 利用 prompt cache 差值做微型压缩 | 无 |
 | **Token 预算** | 跨压缩持续追踪 | 无 |
-| **钩子** | 前后压缩钩子 | 无 |
+| **钩子** | 前后压缩钩子 | 有（`session_before_compact` / `session_compact`） |
 
 ---
 
@@ -344,7 +348,7 @@ complete(model, context, options)   // 非流式
 ```
 
 **Provider 注册表模式：**
-- `getApiProvider(model.api).stream(...)` — 按模型名路由到具体提供商
+- `resolveApiProvider(model.api)` — 先按 API 解析具体提供商，再调用 `stream()` / `streamSimple()`
 - 每个提供商独立实现（OpenAI, Anthropic, Google, Bedrock, Mistral 等）
 - `register-builtins.js` 副作用注册
 
@@ -359,8 +363,8 @@ complete(model, context, options)   // 非流式
 |------|-------------|---------|
 | **提供商** | 仅 Anthropic | 多提供商 (5+) |
 | **API 深度** | 深度集成 Beta 特性 | 标准 API 调用 |
-| **缓存** | Prompt caching 一等支持 | 无 |
-| **成本追踪** | 内置 usage 累积 | 无内置 |
+| **缓存** | Prompt caching 一等支持 | 无 Claude 式集中 cache manager，但 `pi-ai` 支持 provider 级缓存参数（如 `cacheRetention` / `sessionId`） |
+| **成本追踪** | 内置 usage 累积 | TUI footer 会聚合 usage / cost，不是“完全无内置” |
 | **测试** | VCR 录制/回放 | 无（但有 Vitest） |
 | **抽象层** | 无（直接调用 SDK） | 三层抽象（stream → provider → SDK） |
 | **OAuth** | 内置 Anthropic OAuth | `pi-ai/oauth` 模块 |
@@ -399,7 +403,7 @@ complete(model, context, options)   // 非流式
 | **分支** | 无明确分支 | 树状分支（parentId） |
 | **恢复模式** | resume | continue/resume/fork |
 | **版本追踪** | 编译时 MACRO | 无 |
-| **IDE 集成** | Bridge 协议 | 无（纯 CLI） |
+| **IDE 集成** | Bridge 协议 | 无 Claude Code 那种 bridge 协议；但有 `pi-web-ui` 浏览器 UI |
 
 ---
 
@@ -437,7 +441,7 @@ complete(model, context, options)   // 非流式
 - UI 组件
 - 事件处理（tool_call, tool_result, input 等）
 - 自定义压缩
-- MCP 集成
+- MCP 适配可由扩展或外部包提供（非核心内置）
 
 **ExtensionRunner 机制：**
 - `emitToolCall` — 工具调用前拦截
@@ -603,6 +607,6 @@ complete(model, context, options)   // 非流式
 - 会话分支和 fork 能力
 - 标准工具链和完整测试
 
-但它在**性能优化和企业功能**方面不如 Claude Code：无流式工具执行、单一压缩策略、无内置权限系统、无 prompt cache 优化。
+但它在**性能优化和企业功能**方面仍不如 Claude Code：无流式工具执行、压缩策略更单一、无内置权限系统，也缺少 Claude Code 那种一等的 prompt-cache-aware 优化链路。
 
 两者代表了 Coding Agent 设计的两种路线：**深度垂直集成** vs **水平通用框架**。

@@ -2,14 +2,17 @@
 
 ## 包依赖关系
 
+下面这张图主要强调 **monorepo 内部依赖**；外部依赖只举关键例子，不做完整穷举。
+
 ```
-pi-ai（无内部依赖）
-  └─ @sinclair/typebox（JSON schema）
+pi-ai（无 monorepo 内部依赖）
+  ├─ @sinclair/typebox（JSON schema）
+  └─ 多个 provider SDK / 校验与网络依赖（Anthropic、OpenAI、Google、AJV、undici ...）
 
 pi-agent-core
   └─ @mariozechner/pi-ai
 
-pi-tui（无内部依赖）
+pi-tui（无 monorepo 内部依赖）
   └─ 终端渲染库
 
 pi-coding-agent
@@ -18,11 +21,16 @@ pi-coding-agent
   └─ @mariozechner/pi-tui
 
 pi-web-ui
+  ├─ @mariozechner/pi-ai
+  └─ @mariozechner/pi-tui
+
+pi-mom（Slack 机器人）
+  ├─ @mariozechner/pi-coding-agent
   ├─ @mariozechner/pi-agent-core
   └─ @mariozechner/pi-ai
 
-pi-mom（Slack 机器人）
-  └─ @mariozechner/pi-coding-agent
+pi-pods（GPU pod / vLLM 管理 CLI）
+  └─ @mariozechner/pi-agent-core
 ```
 
 ## 完整调用图：用户输入到工具执行
@@ -32,7 +40,7 @@ AgentSession.prompt(text)                   ← coding-agent
 │
 ├── this.agent.prompt(userMessage)          ← agent-core
 │   │
-│   ├── Agent._runLoop(messages)
+│   ├── Agent.runPromptMessages(messages)
 │   │   │
 │   │   └── runAgentLoop(prompts, context, config, emit, signal)
 │   │       │
@@ -48,9 +56,9 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   │
 │   │                   ├── streamAssistantResponse()
 │   │                   │   │
-│   │                   │   ├── config.transformContext(messages)
-│   │                   │   │   └── AgentSession._emitContext()
-│   │                   │   │       └── ExtensionRunner.emit("context")
+│   │                   │   ├── config.transformContext(messages, signal)
+│   │                   │   │   └── sdk.ts 中注入的 transformContext()
+│   │                   │   │       └── ExtensionRunner.emitContext(messages)
 │   │                   │   │
 │   │                   │   ├── config.convertToLlm(messages)
 │   │                   │   │   └── messages.ts: convertToLlm()
@@ -64,29 +72,33 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   │   │
 │   │                   │   └── streamSimple(model, llmContext)   ← pi-ai
 │   │                   │       │
-│   │                   │       └── getApiProvider(model.api)
+│   │                   │       └── resolveApiProvider(model.api)
 │   │                   │           └── 懒加载包装器
 │   │                   │               └── import("./anthropic.js")
 │   │                   │                   └── Anthropic SDK
 │   │                   │
 │   │                   ├── executeToolCalls()
 │   │                   │   │
+│   │                   │   ├── executeToolCallsSequential()
+│   │                   │   │   └── 仅当全局 `toolExecution === "sequential"` 时进入
+│   │                   │   │
 │   │                   │   └── executeToolCallsParallel()
 │   │                   │       │
 │   │                   │       ├── 顺序准备: prepareToolCall()
 │   │                   │       │   ├── 查找工具
-│   │                   │       │   ├── 验证参数
+│   │                   │       │   ├── prepareToolCallArguments()
+│   │                   │       │   ├── validateToolArguments()
 │   │                   │       │   └── beforeToolCall 钩子
 │   │                   │       │       └── → ExtensionRunner.emitToolCall()
 │   │                   │       │
 │   │                   │       ├── 并发执行: executePreparedToolCall()
-│   │                   │       │   └── tool.execute(id, args, signal)
-│   │                   │       │       ├── edit: 读 → 替换 → 写（无锁，#2327 待修复）
-│   │                   │       │       ├── write: mkdir → 写（无锁）
+│   │                   │       │   └── tool.execute(id, args, signal, onUpdate)
+│   │                   │       │       ├── edit: 读 → 替换 → 写（通过 `withFileMutationQueue` 串行化同文件写入）
+│   │                   │       │       ├── write: mkdir → 写（通过 `withFileMutationQueue` 串行化同文件写入）
 │   │                   │       │       ├── bash: ops.exec(command)
 │   │                   │       │       ├── read: ops.readFile(path)
-│   │                   │       │       ├── grep: ops.exec("rg ...")
-│   │                   │       │       ├── find: ops.exec("fd ...")
+│   │                   │       │       ├── grep: spawn(rg) + GrepOperations
+│   │                   │       │       ├── find: FindOperations（fd 或自定义 glob）
 │   │                   │       │       └── ls: ops.readdir()
 │   │                   │       │
 │   │                   │       └── 顺序完成: finalizeExecutedToolCall()
@@ -96,7 +108,7 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   ├── emit(turn_end)
 │   │                   └── pendingMessages = getSteeringMessages()
 │   │
-│   └── Agent._processLoopEvent(event)
+│   └── Agent.processEvents(event)
 │       ├── 更新 AgentState
 │       └── 通知订阅者
 │
@@ -177,7 +189,7 @@ packages/ai/src/
 ├── utils/event-stream.ts ← 依赖 types.ts（导入 AssistantMessage, AssistantMessageEvent）
 ├── api-registry.ts       ← 依赖 types
 ├── models.ts             ← 依赖 types, models.generated
-├── env-api-keys.ts       ← 无内部依赖
+├── env-api-keys.ts       ← 无 monorepo 内部依赖
 └── providers/
     ├── register-builtins.ts  ← 依赖 api-registry, types
     └── anthropic.ts          ← 依赖 types, event-stream, env-api-keys
@@ -190,7 +202,7 @@ packages/agent/src/
                              导入 types.ts 的 AgentState, AgentTool
 
 packages/coding-agent/src/core/
-├── messages.ts           ← 从 pi-agent-core 导入 CustomAgentMessages
+├── messages.ts           ← 从 pi-agent-core 导入 AgentMessage，并通过 declare module 扩展 CustomAgentMessages
 ├── tools/
 │   ├── edit.ts           ← 从 pi-agent-core 导入 AgentTool
 │   │                        导入 path-utils.ts, edit-diff.ts

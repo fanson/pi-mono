@@ -26,7 +26,7 @@ export default function (pi: ExtensionAPI) {
 
 ## Extension API 完整接口
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — ExtensionAPI L988, ExtensionEvent L851
+> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — `ExtensionAPI`、`ExtensionEvent`
 
 ### 事件订阅
 
@@ -57,7 +57,7 @@ pi.registerTool({
 pi.registerCommand("name", {
   description?: string,
   getArgumentCompletions?: (prefix) => { value, label }[],
-  handler: (args, ctx) => Promise<void>
+  handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>
 })
 ```
 
@@ -135,7 +135,6 @@ pi.events.on("channel", (data) => {}) // 订阅事件
 ```
 资源事件:
   resources_discover  — 发现技能、提示词、主题路径
-  session_directory   — 自定义会话目录
 
 会话事件:
   session_start       — 会话启动/加载/重载后 (含 reason: startup|reload|new|resume|fork)
@@ -163,6 +162,7 @@ Agent 事件:
 
 模型事件:
   model_select        — 模型选择时
+  after_provider_response — HTTP 响应返回后、流式消费前（只读观察）
 
 上下文事件:
   context             — LLM 调用前（可修改消息）
@@ -207,7 +207,7 @@ input:
 
 ## ExtensionRunner 内部实现
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/runner.ts` — ExtensionRunner L202, emitToolCall L662, emitToolResult L612
+> **源码对照**: `packages/coding-agent/src/core/extensions/runner.ts` — `ExtensionRunner`、`emitToolCall`、`emitToolResult`
 
 ### 核心数据
 
@@ -294,14 +294,16 @@ interface ExtensionCommandContext extends ExtensionContext {
 
 ## 扩展加载
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/loader.ts` — loadExtensions L373, loadExtension L329, loadExtensionModule L292
+> **源码对照**: `packages/coding-agent/src/core/extensions/loader.ts` — `loadExtensions`、`loadExtension`、`loadExtensionModule`
 
 ### 发现路径
 
 ```
-1. 项目级: cwd/.pi/extensions/
-2. 全局级: ~/.pi/agent/extensions/
-3. 配置级: settings/CLI 指定的路径
+1. CLI: `--extension ...` 指定的 primary paths（最先进入合并序列）
+2. 已启用扩展来源:
+   - 项目级: `cwd/.pi/extensions/`
+   - 全局级: `~/.pi/agent/extensions/`
+   - settings / package 解析出的额外路径
 ```
 
 ### 发现规则（单层遍历）
@@ -363,8 +365,8 @@ export default function (pi: ExtensionAPI) {
     
     // 用远程操作替换内置工具
     const remoteEditOps = createRemoteEditOps(sshConnection)
-    pi.registerTool(createEditTool(remoteCwd, { operations: remoteEditOps }))
-    // ... read, write, bash 类似
+    pi.registerTool(createEditToolDefinition(remoteCwd, { operations: remoteEditOps }))
+    // ... read, write, bash 也注册各自的 ToolDefinition
   })
   
   // 拦截 !command（直接在远程执行）
@@ -400,7 +402,7 @@ export default function (pi: ExtensionAPI) {
   })
   
   // 会话恢复时读取配置
-  const restoreFromBranch = async () => {
+  const restoreFromBranch = async (_event, ctx) => {
     const branch = ctx.sessionManager.getBranch()
     const configEntry = branch.findLast(e => e.customType === "tools-config")
     if (configEntry) {
@@ -421,9 +423,6 @@ export default function (pi: ExtensionAPI) {
 CLI 启动
   │
   ├── 解析参数
-  │
-  ├── callSessionDirectoryHook()
-  │   └── session_directory 事件（自定义会话目录）
   │
   ├── 创建 SessionManager
   │
@@ -454,6 +453,7 @@ CLI 启动
        │   ├── before_agent_start 事件
        │   ├── context 事件
        │   ├── before_provider_request 事件
+       │   ├── after_provider_response 事件
        │   ├── tool_call / tool_result 事件
        │   └── agent_end 事件
        │
@@ -504,7 +504,7 @@ interface InputEvent {
 
 1. **工厂函数是同步初始化**：可以在 `on` 回调中做异步操作，但工厂本身应快速返回
 2. **`tool_call` 异常会传播**：不像其他事件被 try/catch 包裹
-3. **扩展间顺序**：加载顺序决定事件处理顺序（项目级 → 全局级 → 配置级）
+3. **扩展间顺序**：加载顺序决定事件处理顺序；CLI 指定路径最先进入加载序列，其后才是项目 / 全局 / package / settings 解析出的已启用扩展
 4. **不要修改 agent-core**：所有定制通过扩展 API 实现
 5. **signal 快照**：`ExtensionContext.signal` 在 `createContext()` 时快照，不会动态更新
 6. **Provider 注册时序**：工厂函数中的 `registerProvider` 是延迟的，`bindCore` 后才生效

@@ -18,7 +18,7 @@ The `read` tool checks whether a file is a supported image (jpeg/png/gif/webp) a
 
 **What happens:**
 
-`read.ts` line 185-188:
+`packages/coding-agent/src/core/tools/read.ts` lines 186-188（`mimeType` 检查后的文本分支）:
 ```typescript
 } else {
     // Read text content.
@@ -26,7 +26,7 @@ The `read` tool checks whether a file is a supported image (jpeg/png/gif/webp) a
     const textContent = buffer.toString("utf-8");
 ```
 
-`detectSupportedImageMimeTypeFromFile` in `mime.ts` uses `file-type` to sniff the format, but explicitly filters to only 4 image types:
+`detectSupportedImageMimeTypeFromFile` in `packages/coding-agent/src/utils/mime.ts` (lines 4, 22-24) uses `file-type` to sniff the format, but explicitly filters to only 4 image types:
 ```typescript
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 // ...

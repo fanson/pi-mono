@@ -48,7 +48,7 @@ AgentTool（运行时层）:
 
 ## 共享基础设施
 
-> **源码对照**: `packages/coding-agent/src/core/tools/path-utils.ts` — resolveReadPath L62, resolveToCwd L54, expandPath L39
+> **源码对照**: `packages/coding-agent/src/core/tools/path-utils.ts` — `resolveReadPath`、`resolveToCwd`、`expandPath`
 
 ### 路径解析
 
@@ -138,7 +138,7 @@ grep 和 find 依赖外部二进制，通过 `ensureTool` 自动管理。
 
 ## edit 工具深入分析
 
-> **源码对照**: `packages/coding-agent/src/core/tools/edit.ts`, 匹配算法在 `edit-diff.ts` fuzzyFindText L96
+> **源码对照**: `packages/coding-agent/src/core/tools/edit.ts`，匹配算法在 `edit-diff.ts` 的 `fuzzyFindText`
 
 ### Schema 和参数预处理
 
@@ -250,7 +250,7 @@ interface EditOperations {
 
 ## bash 工具深入分析
 
-> **源码对照**: `packages/coding-agent/src/core/tools/bash.ts` execute L182
+> **源码对照**: `packages/coding-agent/src/core/tools/bash.ts` — `execute`
 
 ### 执行流程
 
@@ -344,7 +344,7 @@ interface BashOperations {
 
 ## read 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/read.ts` execute L58
+> **源码对照**: `packages/coding-agent/src/core/tools/read.ts` — `execute`
 
 ### 特殊能力
 
@@ -391,7 +391,7 @@ interface ReadOperations {
 
 ## write 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/write.ts` execute L44
+> **源码对照**: `packages/coding-agent/src/core/tools/write.ts` — `execute`
 
 ### 执行流程
 
@@ -420,7 +420,7 @@ interface WriteOperations {
 
 ## grep 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/grep.ts` execute L71
+> **源码对照**: `packages/coding-agent/src/core/tools/grep.ts` — `execute`
 
 ### 执行流程
 
@@ -461,7 +461,7 @@ pattern 在 file2.ts 中:
 
 ## find 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/find.ts` execute L64
+> **源码对照**: `packages/coding-agent/src/core/tools/find.ts` — `execute`
 
 ### 执行流程
 
@@ -483,7 +483,7 @@ execute({ pattern, path, limit }):
 
 ## ls 工具
 
-> **源码对照**: `packages/coding-agent/src/core/tools/ls.ts` execute L54
+> **源码对照**: `packages/coding-agent/src/core/tools/ls.ts` — `execute`
 
 ### 执行流程
 

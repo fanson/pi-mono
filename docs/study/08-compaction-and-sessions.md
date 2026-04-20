@@ -7,7 +7,7 @@
 
 ## 上下文压缩系统
 
-> **源码对照**: `packages/coding-agent/src/core/compaction/compaction.ts` — compact L715, findCutPoint L386, generateSummary L530
+> **源码对照**: `packages/coding-agent/src/core/compaction/compaction.ts` — `compact`、`findCutPoint`、`generateSummary`
 
 ### 触发条件
 
@@ -206,7 +206,7 @@ generateBranchSummary(entries, options):
 
 ## 会话管理系统
 
-> **源码对照**: `packages/coding-agent/src/core/session-manager.ts` — SessionManager L664, appendMessage L829, getBranch L1029, branch L1120
+> **源码对照**: `packages/coding-agent/src/core/session-manager.ts` — `SessionManager`、`appendMessage`、`getBranch`、`branch`
 
 ### SessionEntry 类型
 
