@@ -13,6 +13,7 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	ThinkingLevel,
+	ToolExecutionMode,
 } from "@mariozechner/pi-agent-core";
 import type {
 	Api,
@@ -74,7 +75,7 @@ import type {
 } from "../tools/index.js";
 
 export type { ExecOptions, ExecResult } from "../exec.js";
-export type { AgentToolResult, AgentToolUpdateCallback };
+export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.js";
 
 // ============================================================================
@@ -308,7 +309,7 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	}): Promise<{ cancelled: boolean }>;
 
 	/** Fork from a specific entry, creating a new session file. */
-	fork(entryId: string): Promise<{ cancelled: boolean }>;
+	fork(entryId: string, options?: { position?: "before" | "at" }): Promise<{ cancelled: boolean }>;
 
 	/** Navigate to a different point in the session tree. */
 	navigateTree(
@@ -379,9 +380,20 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	promptGuidelines?: string[];
 	/** Parameter schema (TypeBox) */
 	parameters: TParams;
+	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
+	renderShell?: "default" | "self";
 
 	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
 	prepareArguments?: (args: unknown) => Static<TParams>;
+
+	/**
+	 * Per-tool execution mode override.
+	 * - "sequential": this tool must execute one at a time with other tool calls.
+	 * - "parallel": this tool can execute concurrently with other tool calls.
+	 *
+	 * If omitted, the default execution mode applies.
+	 */
+	executionMode?: ToolExecutionMode;
 
 	/** Execute the tool. */
 	execute(
@@ -461,6 +473,7 @@ export interface SessionBeforeSwitchEvent {
 export interface SessionBeforeForkEvent {
 	type: "session_before_fork";
 	entryId: string;
+	position: "before" | "at";
 }
 
 /** Fired before context compaction (can be cancelled or customized) */
@@ -479,7 +492,7 @@ export interface SessionCompactEvent {
 	fromExtension: boolean;
 }
 
-/** Fired on process exit */
+/** Fired on graceful process shutdown paths such as Ctrl+C, Ctrl+D, SIGHUP, and SIGTERM. */
 export interface SessionShutdownEvent {
 	type: "session_shutdown";
 }
@@ -539,6 +552,13 @@ export interface ContextEvent {
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
 	payload: unknown;
+}
+
+/** Fired after a provider response is received and before the response stream is consumed. */
+export interface AfterProviderResponseEvent {
+	type: "after_provider_response";
+	status: number;
+	headers: Record<string, string>;
 }
 
 /** Fired after user submits prompt but before agent loop. */
@@ -861,6 +881,7 @@ export type ExtensionEvent =
 	| SessionEvent
 	| ContextEvent
 	| BeforeProviderRequestEvent
+	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
 	| AgentStartEvent
 	| AgentEndEvent
@@ -1008,6 +1029,7 @@ export interface ExtensionAPI {
 		event: "before_provider_request",
 		handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
 	): void;
+	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
@@ -1402,7 +1424,7 @@ export interface ExtensionCommandContextActions {
 		parentSession?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;
 	}) => Promise<{ cancelled: boolean }>;
-	fork: (entryId: string) => Promise<{ cancelled: boolean }>;
+	fork: (entryId: string, options?: { position?: "before" | "at" }) => Promise<{ cancelled: boolean }>;
 	navigateTree: (
 		targetId: string,
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
