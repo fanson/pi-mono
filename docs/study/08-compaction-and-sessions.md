@@ -159,7 +159,10 @@ extractFileOperations(previousDetails, toolCalls):
 注意: prepareCompaction 如果发现路径上最后一个条目已经是 compaction，
 返回 undefined 防止双重压缩。
 
-推理模型使用 reasoning: "high"（如果支持）生成摘要。
+推理模型会复用当前 `AgentSession.thinkingLevel` 参与摘要生成：
+- 如果模型支持 reasoning，且 `thinkingLevel` 已设置并且不为 `off`，则 `completeSimple()` 会带上 `reasoning: thinkingLevel`
+- 如果 `thinkingLevel === "off"`，则不会传 `reasoning` 字段
+- split turn 场景下的 `generateTurnPrefixSummary()` 也遵循同样规则，而不是固定强制 `"high"`
 ```
 
 ### 分支摘要 (Branch Summarization)

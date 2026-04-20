@@ -196,7 +196,9 @@ Prompt 结构 (prompt.ts):
 模型选择:
   - 直接使用 completeSimple() (pi-ai 层)
   - 使用与主对话相同的模型和 API key
-  - 推理模型使用 reasoning: "high"
+  - 推理模型复用当前 session 的 `thinkingLevel`
+    - 只有 `thinkingLevel` 已设置且不为 `off` 时，才会传 `reasoning: thinkingLevel`
+    - `generateSummary()` 和 `generateTurnPrefixSummary()` 都遵循这条规则
 
 Prompt 结构:
   SUMMARIZATION_SYSTEM_PROMPT (系统提示, 定义角色)
