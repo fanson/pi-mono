@@ -26,7 +26,7 @@ export default function (pi: ExtensionAPI) {
 
 ## Extension API 完整接口
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — ExtensionAPI L986, ExtensionEvent L859
+> **源码对照**: `packages/coding-agent/src/core/extensions/types.ts` — `ExtensionAPI`、`ExtensionEvent`
 
 ### 事件订阅
 
@@ -51,38 +51,13 @@ pi.registerTool({
 })
 ```
 
-### defineTool 辅助函数
-
-v0.66+ 新增 `defineTool` 类型辅助函数，用于在扩展外部定义工具时保持 TypeScript 泛型推断：
-
-```typescript
-import { defineTool } from "@mariozechner/pi-coding-agent"
-
-const myTool = defineTool({
-  name: "my-tool",
-  label: "My Tool",
-  description: "...",
-  parameters: Type.Object({ query: Type.String() }),
-  execute: async (id, args, signal) => {
-    // args.query 自动推断为 string
-    return { resultForAssistant: args.query }
-  }
-})
-
-// 用于 SDK 的 customTools 数组或变量传递
-createAgentSession({ customTools: [myTool] })
-```
-
-直接在 `pi.registerTool()` 内联时不需要 `defineTool`（上下文类型推断足够），
-仅在赋值给变量或放入数组时需要。
-
 ### 命令注册
 
 ```typescript
 pi.registerCommand("name", {
   description?: string,
   getArgumentCompletions?: (prefix) => { value, label }[],
-  handler: (args, ctx) => Promise<void>
+  handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>
 })
 ```
 
@@ -182,44 +157,40 @@ Agent 事件:
   user_bash           — !command 执行前
 
 工具事件:
-  tool_call           — 工具调用前（可阻止；亦可就地改写 `event.input`）
-  tool_result         — 工具结果后（可按字段覆盖，见下方链式规则）
+  tool_call           — 工具调用前（可阻止）
+  tool_result         — 工具结果后（可修改）
 
 模型事件:
   model_select        — 模型选择时
+  after_provider_response — HTTP 响应返回后、流式消费前（只读观察）
 
 上下文事件:
   context             — LLM 调用前（可修改消息）
   before_provider_request — HTTP 请求前（可修改 payload）
 ```
 
-**历史说明**：旧版扩展 API 曾包含 `session_directory` 事件以及启动阶段的 `callSessionDirectoryHook()`；**当前已移除**。会话目录由 CLI / settings（如 `--session-dir`）等机制解析，不再通过扩展事件注入。
-
 ### 影响行为的事件
 
 | 事件 | 返回值 | 效果 |
 |------|--------|------|
-| `tool_call` | `{ block?: true, reason? }` | **阻止**工具执行，第一个 `block: true` 生效；若不阻止，可**就地**改写 `event.input`（后续处理器看到已改参数；不做 schema 重验） |
-| `tool_result` | `{ content?, details?, isError? }` | **修改**工具结果：对共享事件对象按字段 **last-writer-wins**（`content` / `details` / `isError` 各自独立，后来的处理器覆盖该字段） |
+| `tool_call` | `{ block: true, reason }` | **阻止**工具执行，第一个阻止的生效 |
+| `tool_result` | `{ content?, details?, isError? }` | **修改**工具结果，所有处理器的改动合并 |
 | `context` | `{ messages? }` | **替换**发给 LLM 的消息，链式传递 |
 | `before_provider_request` | payload | **替换** HTTP 请求体，链式传递 |
 | `before_agent_start` | `{ message?, systemPrompt? }` | **累积**消息，**替换**系统提示词（最后一个生效） |
 | `input` | `{ action: "handled" }` | **拦截**输入，停止后续处理 |
 | `input` | `{ action: "transform", text }` | **变换**输入内容，链式传递 |
 | `user_bash` | `{ operations?, result? }` | **覆盖** bash 执行方式 |
-| `session_before_switch` | `{ cancel? }` | **取消**切换会话 |
-| `session_before_fork` | `{ cancel?, skipConversationRestore? }` | **取消** fork，或 fork 后**跳过**恢复对话 |
-| `session_before_compact` | `{ cancel?, compaction? }` | **取消**压缩，或提供可选的 `compaction`（`CompactionResult`） |
-| `session_before_tree` | `{ cancel?, summary?, customInstructions?, … }` | **取消**树导航或覆盖摘要/指令等（见类型） |
+| `session_before_*` | `{ cancel: true }` | **取消**对应操作 |
 
 ### 事件链处理规则
 
 ```
 tool_call:
-  遍历所有处理器 → 共享同一 event；可先就地改写 event.input → 若某次返回 { block: true } 则停止并阻止执行
+  遍历所有处理器 → 第一个返回 { block: true } 的生效 → 停止遍历
 
 tool_result:
-  遍历所有处理器 → 共享同一 currentEvent；各处理器可返回字段补丁 → content/details/isError 各自为 last-writer-wins（非深度合并）
+  遍历所有处理器 → 每个可以修改 event 对象 → 最终结果是所有修改的合并
 
 context:
   处理器 A 返回 { messages: [...] }
@@ -236,7 +207,7 @@ input:
 
 ## ExtensionRunner 内部实现
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/runner.ts` — ExtensionRunner L202, emitToolCall L662, emitToolResult L612
+> **源码对照**: `packages/coding-agent/src/core/extensions/runner.ts` — `ExtensionRunner`、`emitToolCall`、`emitToolResult`
 
 ### 核心数据
 
@@ -262,7 +233,7 @@ errorListeners: Set<ErrorListener>   // 错误监听器
    → 替换 runtime.registerProvider/unregisterProvider 为立即生效版本
 
 3. ExtensionRunner.bindCommandContext(actions?)
-   → 绑定 waitForIdle/newSession/fork/switchSession/navigateTree/reload 等
+   → 绑定 waitForIdle/newSession/fork 等
    → 如果不提供 actions，命令操作变为 no-op
 
 4. ExtensionRunner.setUIContext(uiContext)
@@ -312,36 +283,27 @@ interface ExtensionContext {
 
 ```typescript
 interface ExtensionCommandContext extends ExtensionContext {
-  waitForIdle(): Promise<void>
-  newSession(options?: {
-    parentSession?: string
-    setup?: (sessionManager: SessionManager) => Promise<void>
-  }): Promise<{ cancelled: boolean }>
-  fork(entryId: string): Promise<{ cancelled: boolean }>
-  navigateTree(targetId: string, options?: {
-    summarize?: boolean
-    customInstructions?: string
-    replaceInstructions?: boolean
-    label?: string
-  }): Promise<{ cancelled: boolean }>
-  switchSession(sessionPath: string): Promise<{ cancelled: boolean }>
-  reload(): Promise<void>
+  waitForIdle: () => Promise<void>
+  newSession: () => void
+  fork: (entryId?) => void
+  navigateTree: () => void
+  switchSession: () => void
+  reload: () => void
 }
 ```
 
-**注意**: v0.65+ 中 `newSession`、`fork`、`navigateTree`、`switchSession` 均改为异步方法，
-返回 `{ cancelled: boolean }` 表示扩展是否通过 `session_before_switch` / `session_before_fork` 事件取消了操作。
-
 ## 扩展加载
 
-> **源码对照**: `packages/coding-agent/src/core/extensions/loader.ts` — loadExtensions L373, loadExtension L329, loadExtensionModule L292
+> **源码对照**: `packages/coding-agent/src/core/extensions/loader.ts` — `loadExtensions`、`loadExtension`、`loadExtensionModule`
 
 ### 发现路径
 
 ```
-1. 项目级: cwd/.pi/extensions/
-2. 全局级: ~/.pi/agent/extensions/
-3. 配置级: settings/CLI 指定的路径
+1. CLI: `--extension ...` 指定的 primary paths（最先进入合并序列）
+2. 已启用扩展来源:
+   - 项目级: `cwd/.pi/extensions/`
+   - 全局级: `~/.pi/agent/extensions/`
+   - settings / package 解析出的额外路径
 ```
 
 ### 发现规则（单层遍历）
@@ -403,8 +365,8 @@ export default function (pi: ExtensionAPI) {
     
     // 用远程操作替换内置工具
     const remoteEditOps = createRemoteEditOps(sshConnection)
-    pi.registerTool(createEditTool(remoteCwd, { operations: remoteEditOps }))
-    // ... read, write, bash 类似
+    pi.registerTool(createEditToolDefinition(remoteCwd, { operations: remoteEditOps }))
+    // ... read, write, bash 也注册各自的 ToolDefinition
   })
   
   // 拦截 !command（直接在远程执行）
@@ -440,7 +402,7 @@ export default function (pi: ExtensionAPI) {
   })
   
   // 会话恢复时读取配置
-  const restoreFromBranch = async () => {
+  const restoreFromBranch = async (_event, ctx) => {
     const branch = ctx.sessionManager.getBranch()
     const configEntry = branch.findLast(e => e.customType === "tools-config")
     if (configEntry) {
@@ -460,7 +422,7 @@ export default function (pi: ExtensionAPI) {
 ```
 CLI 启动
   │
-  ├── 解析参数（含会话目录等 CLI/settings）
+  ├── 解析参数
   │
   ├── 创建 SessionManager
   │
@@ -491,6 +453,7 @@ CLI 启动
        │   ├── before_agent_start 事件
        │   ├── context 事件
        │   ├── before_provider_request 事件
+       │   ├── after_provider_response 事件
        │   ├── tool_call / tool_result 事件
        │   └── agent_end 事件
        │
@@ -541,7 +504,7 @@ interface InputEvent {
 
 1. **工厂函数是同步初始化**：可以在 `on` 回调中做异步操作，但工厂本身应快速返回
 2. **`tool_call` 异常会传播**：不像其他事件被 try/catch 包裹
-3. **扩展间顺序**：加载顺序决定事件处理顺序（项目级 → 全局级 → 配置级）
+3. **扩展间顺序**：加载顺序决定事件处理顺序；CLI 指定路径最先进入加载序列，其后才是项目 / 全局 / package / settings 解析出的已启用扩展
 4. **不要修改 agent-core**：所有定制通过扩展 API 实现
 5. **signal 快照**：`ExtensionContext.signal` 在 `createContext()` 时快照，不会动态更新
 6. **Provider 注册时序**：工厂函数中的 `registerProvider` 是延迟的，`bindCore` 后才生效

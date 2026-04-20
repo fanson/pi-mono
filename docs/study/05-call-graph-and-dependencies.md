@@ -2,14 +2,17 @@
 
 ## 包依赖关系
 
+下面这张图主要强调 **monorepo 内部依赖**；外部依赖只举关键例子，不做完整穷举。
+
 ```
-pi-ai（无内部依赖）
-  └─ @sinclair/typebox（JSON schema）
+pi-ai（无 monorepo 内部依赖）
+  ├─ @sinclair/typebox（JSON schema）
+  └─ 多个 provider SDK / 校验与网络依赖（Anthropic、OpenAI、Google、AJV、undici ...）
 
 pi-agent-core
   └─ @mariozechner/pi-ai
 
-pi-tui（无内部依赖）
+pi-tui（无 monorepo 内部依赖）
   └─ 终端渲染库
 
 pi-coding-agent
@@ -18,11 +21,16 @@ pi-coding-agent
   └─ @mariozechner/pi-tui
 
 pi-web-ui
+  ├─ @mariozechner/pi-ai
+  └─ @mariozechner/pi-tui
+
+pi-mom（Slack 机器人）
+  ├─ @mariozechner/pi-coding-agent
   ├─ @mariozechner/pi-agent-core
   └─ @mariozechner/pi-ai
 
-pi-mom（Slack 机器人）
-  └─ @mariozechner/pi-coding-agent
+pi-pods（GPU pod / vLLM 管理 CLI）
+  └─ @mariozechner/pi-agent-core
 ```
 
 ## 完整调用图：用户输入到工具执行
@@ -32,7 +40,7 @@ AgentSession.prompt(text)                   ← coding-agent
 │
 ├── this.agent.prompt(userMessage)          ← agent-core
 │   │
-│   ├── Agent._runLoop(messages)
+│   ├── Agent.runPromptMessages(messages)
 │   │   │
 │   │   └── runAgentLoop(prompts, context, config, emit, signal)
 │   │       │
@@ -48,8 +56,9 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   │
 │   │                   ├── streamAssistantResponse()
 │   │                   │   │
-│   │                   │   ├── config.transformContext(messages)
-│   │                   │   │   └── sdk.ts 注入: async (messages) → ExtensionRunner.emitContext(messages)
+│   │                   │   ├── config.transformContext(messages, signal)
+│   │                   │   │   └── sdk.ts 中注入的 transformContext()
+│   │                   │   │       └── ExtensionRunner.emitContext(messages)
 │   │                   │   │
 │   │                   │   ├── config.convertToLlm(messages)
 │   │                   │   │   └── messages.ts: convertToLlm()
@@ -63,33 +72,33 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   │   │
 │   │                   │   └── streamSimple(model, llmContext)   ← pi-ai
 │   │                   │       │
-│   │                   │       └── getApiProvider(model.api)
+│   │                   │       └── resolveApiProvider(model.api)
 │   │                   │           └── 懒加载包装器
 │   │                   │               └── import("./anthropic.js")
 │   │                   │                   └── Anthropic SDK
 │   │                   │
 │   │                   ├── executeToolCalls()
 │   │                   │   │
-│   │                   │   ├── toolExecution === "sequential" → executeToolCallsSequential()
-│   │                   │   │   （每个工具调用：prepare → execute → finalize 完全串行后再处理下一个）
+│   │                   │   ├── executeToolCallsSequential()
+│   │                   │   │   └── 仅当全局 `toolExecution === "sequential"` 时进入
 │   │                   │   │
-│   │                   │   └── 否则 → executeToolCallsParallel()
+│   │                   │   └── executeToolCallsParallel()
 │   │                   │       │
 │   │                   │       ├── 顺序准备: prepareToolCall()
 │   │                   │       │   ├── 查找工具
-│   │                   │       │   ├── prepareToolCallArguments()（若工具有 prepareArguments）
+│   │                   │       │   ├── prepareToolCallArguments()
 │   │                   │       │   ├── validateToolArguments()
 │   │                   │       │   └── beforeToolCall 钩子
 │   │                   │       │       └── → ExtensionRunner.emitToolCall()
 │   │                   │       │
 │   │                   │       ├── 并发执行: executePreparedToolCall()
-│   │                   │       │   └── tool.execute(id, args, signal)
-│   │                   │       │       ├── edit: withFileMutationQueue 内读 → 替换 → 写（同文件串行）
-│   │                   │       │       ├── write: withFileMutationQueue 内 mkdir → 写（同文件串行）
+│   │                   │       │   └── tool.execute(id, args, signal, onUpdate)
+│   │                   │       │       ├── edit: 读 → 替换 → 写（通过 `withFileMutationQueue` 串行化同文件写入）
+│   │                   │       │       ├── write: mkdir → 写（通过 `withFileMutationQueue` 串行化同文件写入）
 │   │                   │       │       ├── bash: ops.exec(command)
 │   │                   │       │       ├── read: ops.readFile(path)
-│   │                   │       │       ├── grep: ops.exec("rg ...")
-│   │                   │       │       ├── find: ops.exec("fd ...")
+│   │                   │       │       ├── grep: spawn(rg) + GrepOperations
+│   │                   │       │       ├── find: FindOperations（fd 或自定义 glob）
 │   │                   │       │       └── ls: ops.readdir()
 │   │                   │       │
 │   │                   │       └── 顺序完成: finalizeExecutedToolCall()
@@ -109,8 +118,6 @@ AgentSession.prompt(text)                   ← coding-agent
     ├── 检查自动压缩                   // 上下文是否过大
     └── 处理错误/重试
 ```
-
-当 `toolExecution === "sequential"` 时，`executeToolCallsSequential` 对每个 tool call 依次完成 prepare → execute → finalize，再处理下一个。默认（parallel）路径下，`executeToolCallsParallel` 先**串行**跑完所有 `prepareToolCall`，再**并发**启动各 `tool.execute`，最后按顺序 await 并完成 finalize（`packages/agent/src/agent-loop.ts`）。
 
 ## 关键抽象边界
 
@@ -182,7 +189,7 @@ packages/ai/src/
 ├── utils/event-stream.ts ← 依赖 types.ts（导入 AssistantMessage, AssistantMessageEvent）
 ├── api-registry.ts       ← 依赖 types
 ├── models.ts             ← 依赖 types, models.generated
-├── env-api-keys.ts       ← 无内部依赖
+├── env-api-keys.ts       ← 无 monorepo 内部依赖
 └── providers/
     ├── register-builtins.ts  ← 依赖 api-registry, types
     └── anthropic.ts          ← 依赖 types, event-stream, env-api-keys
@@ -195,7 +202,7 @@ packages/agent/src/
                              导入 types.ts 的 AgentState, AgentTool
 
 packages/coding-agent/src/core/
-├── messages.ts           ← 从 pi-agent-core 导入 CustomAgentMessages
+├── messages.ts           ← 从 pi-agent-core 导入 AgentMessage，并通过 declare module 扩展 CustomAgentMessages
 ├── tools/
 │   ├── edit.ts           ← 从 pi-agent-core 导入 AgentTool
 │   │                        导入 path-utils.ts, edit-diff.ts

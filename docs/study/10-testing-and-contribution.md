@@ -16,6 +16,8 @@ Vitest 配置:
 
 ## 测试目录结构
 
+下面的目录树是**代表性样本**，不是 `packages/ai/test/` / `packages/coding-agent/test/` 的完整穷举。
+
 ```
 packages/ai/test/
 ├── stream.test.ts          — 流式调用测试
@@ -54,7 +56,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { editTool } from "../src/core/tools/edit.js"
 
 describe("edit tool", () => {
   let tempDir: string
@@ -71,9 +72,10 @@ describe("edit tool", () => {
     const filePath = join(tempDir, "test.txt")
     writeFileSync(filePath, "hello world")
 
-    const result = await editTool.execute("id", {
-      path: filePath,
-      edits: [{ oldText: "hello", newText: "goodbye" }],
+    const tool = createEditTool(tempDir)
+    const result = await tool.execute("id", {
+      path: "test.txt",
+      edits: [{ oldText: "hello", newText: "goodbye" }]
     })
 
     expect(result.content[0].text).toContain("Successfully")
@@ -140,7 +142,7 @@ npm run check
 ```
 
 `npm run check` 做了什么:
-1. **Biome** — lint + 格式化（`--error-on-warnings`）
+1. **Biome** — lint + 自动写回格式修复（`--write --error-on-warnings`）
 2. **tsgo --noEmit** — TypeScript 类型检查
 3. **check:browser-smoke** — 浏览器构建冒烟测试
 4. **packages/web-ui check** — web-ui 包的检查
@@ -185,7 +187,8 @@ npm run check
    - 添加相关的 pkg:* 标签
    │
    ▼
-3. 等待 maintainer 回复 "lgtm"
+3. 等待 maintainer 回复 `lgtm`
+   - 拿到 `lgtm` 后再继续准备 PR
    - 不要在获得认可前就开始写代码
    │
    ▼
@@ -218,7 +221,7 @@ npm run check
 
 | 规则 | 原因 |
 |------|------|
-| 先开 issue，等 lgtm | 避免浪费时间在不被接受的改动上 |
+| 先开 issue，等 `lgtm` | 避免在方向未被接受时过早投入实现 |
 | `npm run check` 无错误 | 静态检查是提交的最低门槛 |
 | `./test.sh` 全通过 | 确保不破坏现有功能 |
 | 不编辑 CHANGELOG.md | maintainer 在 release 时统一更新 |

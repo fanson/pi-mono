@@ -24,21 +24,23 @@ A more concrete scenario:
 
 **What happens:**
 
-`edit.ts` line 222-246:
+`packages/coding-agent/src/core/tools/edit.ts` execute path around lines 357-382:
 ```typescript
+await withFileMutationQueue(absolutePath, async () => {
 const buffer = await ops.readFile(absolutePath);
 const rawContent = buffer.toString("utf-8");
 // ... normalize, apply edits ...
 const finalContent = bom + restoreLineEndings(newContent, originalEnding);
 await ops.writeFile(absolutePath, finalContent);
 // ← No check that the file hasn't changed since the read
+});
 ```
 
 The `oldText` matching in `applyEditsToNormalizedContent` provides **partial** protection: if the external change modifies the same region being edited, `oldText` won't match and the edit fails (safe). But if the external change only modifies a **different** region of the file (e.g. the formatter fixes trailing whitespace at the end while the agent edits a function at the top), `oldText` still matches and the write succeeds — silently reverting the formatter's changes.
 
 **Context:**
 
-Pi already has `file-mutation-queue.ts` which serializes concurrent tool calls that target the same file. This handles internal concurrency well. But it doesn't cover external modifications (IDE formatters, git hooks, other processes).
+Pi already has `file-mutation-queue.ts` which serializes concurrent tool calls that target the same file. This handles **internal** concurrency well. But it still doesn't cover **external** modifications (IDE formatters, git hooks, other processes) that happen between the read and write inside the queued critical section.
 
 **Expected behavior:**
 

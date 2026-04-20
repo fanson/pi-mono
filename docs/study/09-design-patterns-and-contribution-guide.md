@@ -48,7 +48,7 @@ queue 在消费者较慢时缓冲事件。
 
 ### 5. 懒加载 Provider
 
-**位置**: pi-ai 的 `register-builtins.ts`
+**位置**: pi-ai 的 `src/providers/register-builtins.ts`
 
 **模式**: Provider 模块只在首次使用时动态导入。同步的包装器立即返回 stream；
 实际的 provider 在内部异步加载。
@@ -113,8 +113,10 @@ import { Type } from "@sinclair/typebox"
 
 const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file" }),
-  oldText: Type.String({ description: "Exact text to find" }),
-  newText: Type.String({ description: "Text to replace with" }),
+  edits: Type.Array(Type.Object({
+    oldText: Type.String({ description: "Exact text to find" }),
+    newText: Type.String({ description: "Text to replace with" }),
+  })),
 })
 ```
 
@@ -134,7 +136,7 @@ Agent.prompt() → AbortController.signal
       → streamSimple(options.signal)
         → provider SDK（转发 signal）
     → executeToolCalls(signal)
-      → tool.execute(signal)
+      → tool.execute(id, args, signal, onUpdate)
         → ops.exec(signal)  // bash
 ```
 
@@ -147,7 +149,7 @@ Agent.prompt() → AbortController.signal
 
 1. 读 `CONTRIBUTING.md` 和 `AGENTS.md`
 2. 开 issue 描述改动
-3. 等 maintainer 回复 `lgtm`
+3. 先等 maintainer 回复 `lgtm`
 4. 确定改动影响哪一层
 
 ### 层级放置指南
@@ -156,7 +158,7 @@ Agent.prompt() → AbortController.signal
 |------|----------|
 | 新 LLM provider | pi-ai |
 | Provider 特定选项 | pi-ai |
-| 模型定价更新 | pi-ai (scripts/generate-models.ts) |
+| 模型定价更新 | pi-ai (`packages/ai/scripts/generate-models.ts`) |
 | 循环控制流（steering、follow-up） | agent-core |
 | 工具执行顺序 | agent-core |
 | 新钩子类型 | agent-core |
