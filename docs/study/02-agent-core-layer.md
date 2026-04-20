@@ -199,9 +199,13 @@ runLoop():
 
 ### 并行执行模式（parallel 分支）
 
-只有当 `AgentLoopConfig.toolExecution !== "sequential"` 时，才会进入下面这条并行分支。
-否则循环会走 `executeToolCallsSequential()`，按 prepare → execute → finalize
-逐个执行工具调用。
+只有同时满足下面两个条件时，才会进入下面这条并行分支：
+
+1. `AgentLoopConfig.toolExecution !== "sequential"`
+2. 这一批 `toolCalls` 里没有命中 `executionMode === "sequential"` 的工具
+
+只要任一工具声明了 `executionMode: "sequential"`，当前整批调用就会走
+`executeToolCallsSequential()`，按 prepare → execute → finalize 逐个执行。
 
 ```typescript
 // 步骤 1: 顺序准备所有工具调用（保证钩子顺序）
@@ -230,7 +234,7 @@ for (const running of runningCalls) {
 
 关键细节：
 - **Prepare** 是串行的：钩子看到一致的状态
-- **Execute** 是并发的：`.map()` 同时启动所有，每个 `.execution` 是一个 Promise
+- **Execute** 只在满足上面两个条件时才并发：`.map()` 同时启动所有，每个 `.execution` 是一个 Promise
 - **Finalize** 是串行的：结果按 LLM 指定的顺序发射
 - **file-mutation-queue 的意义**：execute 阶段并发，所以两个 edit 同时操作同一文件会竞争（通过 `withFileMutationQueue` 串行化，详见 [06-tool-system-deep-dive.md](06-tool-system-deep-dive.md)）
 

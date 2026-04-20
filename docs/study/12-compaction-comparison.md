@@ -516,14 +516,14 @@ runPostCompactCleanup(querySource):
 
 #### Pi
 
-Pi 的 compact 后没有显式的缓存清理步骤。compact 通过修改 session 文件中的 firstKeptEntryId 来标记哪些消息已被压缩, `buildSessionContext()` 在下次构建上下文时自然跳过被压缩的消息。
+Pi 的 compact 后没有显式的缓存清理步骤。compact 会**追加一条 `compaction` session entry**，其中带着 `firstKeptEntryId`；`buildSessionContext()` 在后续构建上下文时读取这条 compaction 条目，自然跳过被压缩的消息。
 
 ### 13. 遥测与可观测性
 
 | 维度 | Claude Code | Pi |
 |------|------------|-----|
-| **事件** | `tengu_compact`, `tengu_compact_failed`, `tengu_compact_ptl_retry`, `tengu_cached_microcompact` | 无遥测 |
-| **指标** | preCompactTokenCount, postCompactTokenCount, truePostCompactTokenCount, compactionInputTokens, compactionOutputTokens, cache 命中率, isRecompactionInChain | 无指标 |
+| **事件** | `tengu_compact`, `tengu_compact_failed`, `tengu_compact_ptl_retry`, `tengu_cached_microcompact` | `compaction_start` / `compaction_end` 这类生命周期 AgentEvent，但没有 Claude Code 那种专项分析遥测 |
+| **指标** | preCompactTokenCount, postCompactTokenCount, truePostCompactTokenCount, compactionInputTokens, compactionOutputTokens, cache 命中率, isRecompactionInChain | 无 Claude Code 同级别的 compaction 专项指标 |
 | **Cache break 检测** | `notifyCompaction()` → 重置 cache read baseline, 防止误报 | 无 |
 | **上下文分析** | `analyzeContext(messages)` → 详细 token 分布统计 | 无 |
 | **重压缩追踪** | `RecompactionInfo`: isRecompactionInChain, turnsSincePreviousCompact, previousCompactTurnId | 无 |
@@ -544,7 +544,7 @@ PTL 恢复            ✔ (3 次重试 + 截断)              ✘
 分支摘要            ✘ (扁平消息 + partial compact)    ✔ (原生树形 + branch summary)
 扩展可替代          ✘ (hook 只能追加)                 ✔ (session_before_compact 可取消/替代)
 Prompt cache 感知   ✔ (核心设计目标)                  ✘
-遥测                ✔ (详细事件和指标)                ✘
+遥测                ✔ (详细事件和指标)                △ (有 `compaction_start/end` 生命周期事件，但无同级指标)
 Provider 锁定       ✔ (cache_edits 限 Anthropic)      ✘ (provider 中立)
 ```
 

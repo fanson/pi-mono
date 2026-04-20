@@ -177,13 +177,14 @@ AgentSession 把所有组件连接在一起：
                     │    ▼                  │
                     │  _handleAgentEvent()  │←─── AgentEvent 事件流
                     │    │                  │
-                    │    ├── 持久化到       │───→ SessionManager
-                    │    │   会话存储       │
-                    │    ├── 运行扩展       │───→ ExtensionRunner
-                    │    │   钩子           │
-                    │    ├── 自动压缩       │───→ Compaction
-                    │    │   （上下文过大时）│
-                    │    └── 出错时重试     │
+                    │    ├── 串行排队处理   │───→ _agentEventQueue
+                    │    ├── 先发给扩展     │───→ ExtensionRunner
+                    │    ├── 再通知监听者   │───→ UI / subscribers
+                    │    ├── message_end 时 │───→ SessionManager
+                    │    │   才持久化消息   │
+                    │    ├── agent_end 后   │───→ Compaction / Retry
+                    │    │   检查压缩与重试 │
+                    │    └── 出错时兜底保活 │
                     │                      │
                     └──────────────────────┘
 ```
@@ -198,7 +199,8 @@ createAgentSession(options)                  ← sdk.ts
   2. 创建 Agent:
      - convertToLlm: 含 blockImages 过滤（settings.getBlockImages() 时剥离图片内容）
      - transformContext: 委托给 extension "context" 钩子
-     - getApiKey: 委托给 modelRegistry.getApiKeyAndHeaders
+     - streamFn: 先调用 modelRegistry.getApiKeyAndHeaders(model)
+       再把 { apiKey, headers } 传给 streamSimple(...)
      - onPayload: 触发 extension "before_provider_request" 钩子
   3. 恢复会话（或初始化新会话）
   4. 创建 AgentSession（Agent 作为参数传入，不是由 AgentSession 创建）
@@ -652,17 +654,17 @@ interface Settings {
 
 ```
 DefaultResourceLoader.reload()
-  1. packageManager.resolve()     ← 从 settings 解析包路径
-  2. resolveExtensionSources()    ← 解析 CLI 指定的扩展（标记为 temporary）
-  3. 合并扩展路径: CLI primary paths + enabledExtensions
-  4. loadExtensions()             ← 加载扩展（jiti），附加 sourceInfo
-  5. loadExtensionFactories()     ← 加载内联 extension factories
-  6. detectExtensionConflicts()   ← 检查重复工具名 / 命令 / 标志
-  7. updateSkillsFromPaths()      ← 加载 skills，附加 sourceInfo
-  8. updatePromptsFromPaths()     ← 加载 prompt 模板，附加 sourceInfo
-  9. updateThemesFromPaths()      ← 加载主题，附加 sourceInfo
-  10. getAgentsFiles()            ← 发现 AGENTS.md / CLAUDE.md（agent 目录 + 祖先目录遍历）
-  11. 解析系统提示词覆盖
+  1. settingsManager.reload()
+  2. packageManager.resolve()      ← 从 settings 解析已启用资源
+  3. resolveExtensionSources()     ← 解析 CLI 指定路径（标记为 temporary）
+  4. 合并扩展路径: CLI primary paths + enabledExtensions
+  5. loadExtensions()              ← 加载扩展（jiti）
+  6. loadExtensionFactories()      ← 加载内联 extension factories
+  7. detectExtensionConflicts()    ← 检查重复工具名 / 命令 / 标志
+  8. 合并并更新 skills/prompts/themes
+     （CLI paths 优先，其后才是已启用路径和 additional paths）
+  9. getAgentsFiles()              ← 发现 AGENTS.md / CLAUDE.md（agent 目录 + 祖先目录遍历）
+  10. 解析系统提示词覆盖
 ```
 
 ### 资源类型
@@ -743,7 +745,7 @@ API key 优先级：**runtime > file > env > fallback**
 
 - **`refresh()`**: 重置所有 API/OAuth 注册，重新加载配置
 - **`registerProvider(name, config)`** / **`unregisterProvider(name)`**: 运行时注册/注销 Provider
-- **`getApiKeyAndHeaders(provider, model)`**: 统一获取认证信息
+- **`getApiKeyAndHeaders(model)`**: 统一获取认证信息
 - **`clearApiKeyCache()`**: 清除缓存的 API key
 
 `ProviderConfigInput` 支持自定义 `streamSimple` 函数和 OAuth 配置，
@@ -784,7 +786,8 @@ OAuth Provider 可通过 `modifyModels` 回调修改模型列表。
 ### API Key 解析
 
 ```
-优先级: CLI 参数 > models.json 中的配置 > auth.json > 环境变量
+优先级（`getApiKeyAndHeaders(model)` 实际路径）:
+CLI 参数(runtime override) > auth.json(api_key / oauth) > 环境变量 > models.json 中 provider 配置的 `apiKey`
 ```
 
 `models.json` 中的 `apiKey` 支持 `!command` 语法：

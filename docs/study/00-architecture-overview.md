@@ -169,7 +169,8 @@ Agent 事件 (agent-core 层):
 
 ### 并行 vs 串行执行
 
-默认是**并行**。区别：
+默认配置是**并行**；但如果某个 tool call 命中的工具声明了
+`executionMode: "sequential"`，当前这整批调用也会回退到串行路径。区别：
 
 ```
 串行:
@@ -232,7 +233,7 @@ getEnvApiKey 检查:
      - anthropic: ANTHROPIC_OAUTH_TOKEN > ANTHROPIC_API_KEY
      - bedrock: AWS_PROFILE, AWS_ACCESS_KEY_ID, IAM 角色
      - vertex: ADC (application_default_credentials.json)
-     - copilot: COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN
+     - github-copilot: COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN
   2. 通用环境变量映射:
      - openai → OPENAI_API_KEY
      - google → GEMINI_API_KEY

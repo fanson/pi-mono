@@ -45,6 +45,7 @@ pi.registerTool({
   description: string,      // LLM 看到的描述
   parameters: TSchema,      // TypeBox schema
   prepareArguments?: (rawArgs) => args,  // schema 验证前的参数预处理
+  executionMode?: "parallel" | "sequential",  // 可强制当前批次回退到串行
   execute: (id, args, signal, onUpdate, ctx) => Promise<AgentToolResult>,
   renderCall?: (args) => TuiNode,      // TUI 渲染
   renderResult?: (result) => TuiNode,  // TUI 渲染
@@ -261,7 +262,7 @@ errorListeners: Set<ErrorListener>   // 错误监听器
 ```typescript
 interface ExtensionContext {
   ui: UIContext             // select, confirm, notify, custom
-  hasUI: boolean            // 是否有 UI（RPC/print 模式下为 false）
+  hasUI: boolean            // 当前 runner 是否绑定了真实 UI；RPC 模式也可以为 true
   cwd: string               // 当前工作目录
   sessionManager: ReadonlySessionManager
   modelRegistry: ModelRegistry
@@ -427,10 +428,10 @@ CLI 启动
   ├── 创建 SessionManager
   │
   ├── ResourceLoader.reload()
-  │   └── discoverAndLoadExtensions()
-  │       ├── 发现扩展文件（项目/全局/配置）
-  │       ├── jiti.import() 加载每个扩展
-  │       └── factory(api) 注册处理器和工具
+  │   ├── resolveExtensionSources()    ← 解析 CLI 临时路径
+  │   ├── 合并 CLI / 已启用扩展路径
+  │   ├── loadExtensions()             ← jiti.import() 加载扩展
+  │   └── loadExtensionFactories()     ← 注册内联 factories
   │
   ├── createAgentSession()
   │   └── _buildRuntime()

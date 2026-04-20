@@ -432,14 +432,12 @@ execute({ pattern, path, glob, ignoreCase, literal, context, limit }):
      --ignore-case (如果 ignoreCase)
      --fixed-strings (如果 literal)
      --glob (如果有 glob)
-     --context-separator="" (如果有 context)
-     -C ${context} (如果有 context)
   3. spawn rg 进程
-  4. 解析 JSON 行输出
+  4. 解析 JSON 行输出，只收集 match 的 filePath / lineNumber / lineText
   5. 收集匹配直到 limit（默认 100）
   6. 达到限制 → 杀死 rg 进程
-  7. 每个匹配: truncateLine（500 字符）
-  8. 按文件分组，带上下文行
+  7. 如果 context > 0：再用 readFile() 读取文件并手工拼上下文行
+  8. 每个输出行都经过 truncateLine（500 字符）
   9. truncateHead（总字节限制）
   10. 返回格式化文本
 ```
@@ -448,11 +446,11 @@ execute({ pattern, path, glob, ignoreCase, literal, context, limit }):
 
 ```
 pattern 在 file1.ts 中:
-  L12: matched line content
-  L13: context line
+  file1.ts:12: matched line content
+  file1.ts-13- context line
   
 pattern 在 file2.ts 中:
-  L45: another match
+  file2.ts:45: another match
 
 [Found 15 matches in 3 files. Showing first 100.]
 ```
@@ -470,11 +468,11 @@ execute({ pattern, path, limit }):
   1. 如果有自定义 ops.glob → 使用它
   2. 否则: ensureTool("fd", true)
   3. 构建 fd 参数:
-     fd --glob --hidden --no-ignore-parent
-     --ignore-file .gitignore (收集所有 .gitignore)
-  4. spawnSync 执行
-  5. 相对化路径 + POSIX 格式
-  6. 限制结果数量（默认 1000）
+     fd --glob --color=never --hidden --no-require-git --max-results <limit>
+     如果 pattern 含 `/`，还会额外加 --full-path，并把相对路径模式补成 `**/${pattern}`
+  4. spawn 执行
+  5. 逐行读取 stdout，收集命中的文件
+  6. 相对化路径 + POSIX 格式
   7. truncateHead（字节限制）
   8. 返回文件列表
 ```

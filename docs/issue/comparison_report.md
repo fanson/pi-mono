@@ -185,9 +185,10 @@
 
 **单一路径 — `executeToolCalls()`（agent-loop.ts）**
 
-模式只由 `config.toolExecution` 决定：`"sequential"` 或 `"parallel"`
+模式先看全局 `config.toolExecution`，再看这一批调用里是否命中了
+`executionMode === "sequential"` 的工具。
 
-**顺序模式：** 严格 `for` 循环，一个接一个
+**顺序模式：** 只要全局是 `sequential`，或本批存在串行工具，就走严格 `for` 循环，一个接一个
 
 **并行模式：**
 1. 预处理阶段（顺序）：所有工具调用依次经过 `prepareToolCall` + `validateToolArguments` + `beforeToolCall`
@@ -196,19 +197,19 @@
 
 **限制：**
 - 还没有 Claude Code 那种按 `isConcurrencySafe` 把同一批工具切成多个并行/串行子批次的能力
-- 因此 Pi 的粒度就是“整批顺序”或“整批并行”
+- 当前只有“整批并行”或“被任一串行工具拉回整批顺序”这两种粗粒度行为
 
 **关键差异：**
 
 | 维度 | Claude Code | Pi Mono |
 |------|-------------|---------|
 | **流式执行** | 支持（模型输出同时执行工具） | 不支持（等待完整消息后执行） |
-| **并发控制** | 基于工具安全性标记 (`isConcurrencySafe`) | 全局配置开关 (`sequential` vs 并行) |
+| **并发控制** | 基于工具安全性标记 (`isConcurrencySafe`) | 全局开关 + tool-level sequential escape hatch |
 | **最大并发** | 可配置（默认10） | 无上限（所有工具并行） |
 | **兄弟取消** | Bash错误取消兄弟工具 | 无兄弟取消机制 |
 | **结果顺序** | 严格按队列顺序产出 | 并行执行但按序终结 |
 | **上下文修改** | 区分并发/串行两种策略 | 无上下文修改器概念 |
-| **分批策略** | 自动分批（连续安全→合并） | 不分批（全部一起或全部串行） |
+| **分批策略** | 自动分批（连续安全→合并） | 不分批；任一串行工具会让整批回退到串行 |
 
 ---
 
@@ -350,7 +351,7 @@ complete(model, context, options)   // 非流式
 **Provider 注册表模式：**
 - `resolveApiProvider(model.api)` — 先按 API 解析具体提供商，再调用 `stream()` / `streamSimple()`
 - 每个提供商独立实现（OpenAI, Anthropic, Google, Bedrock, Mistral 等）
-- `register-builtins.js` 副作用注册
+- `register-builtins.ts` 副作用注册
 
 **EventStream 通用异步队列：**
 - `AssistantMessageEventStream` — 流事件标准化

@@ -237,14 +237,16 @@
 
 1. pi-ai: LLM API 通信，不知道 agent/工具；agent-core: 循环控制+工具生命周期，不知道文件系统；coding-agent: 领域工具+扩展+会话
 2. 在 `streamAssistantResponse()` 内部，通过 `config.convertToLlm(messages)` 转换，发生在每次 LLM 调用前
-3. prepare: 串行；execute: 并发；finalize: 串行（按源顺序）
+3. 如果全局 `toolExecution === "parallel"` 且这批调用里没有工具声明
+   `executionMode: "sequential"`：prepare 串行、execute 并发、finalize 串行（按源顺序）。
+   只要命中串行工具，整批都会回退到 sequential 路径。
 4. 没有消费者: 加入 `queue` 缓存；有消费者等待: 从 `waiting` 数组取出 resolver 直接 unblock
 5. 生成一个错误内容的 `ToolResultMessage`，跳过 `executePreparedToolCall`，直接走 `emitToolCallOutcome`
 6. 当前 main 通过 `withFileMutationQueue()` 把**同一文件**的内部 tool mutation 串成 FIFO 队列，修复了多个 edit/write 同时命中同一路径时的内部竞态；但它**没有**检测关键区内部发生的外部修改（如 formatter、git hook、其他进程写入）
 7. 在当前 turn 的所有工具调用完成后，`turn_end` 之后，通过 `getSteeringMessages()` 获取并注入到下一个 turn 开始
 8. 因为 `streamSimple()` 的调用者期望同步收到一个 stream 对象。如果 provider throw，调用者无法获得 stream。错误必须通过 stream 事件传播，这样消费者才能统一处理
 9. 不需要。通过 TypeScript 声明合并 (`declare module`)，在 coding-agent 或任何其他包中扩展 `CustomAgentMessages` 接口即可
-10. 被 `default` 分支过滤（返回 undefined），消息被丢弃，LLM 永远看不到它。不会报错，只是静默丢失
+10. 正常开发下会先在 TypeScript 层触发 exhaustiveness 检查（`const _exhaustiveCheck: never = m`）并报编译错误；只有在绕过类型系统时，才会落到运行时过滤分支，表现为消息被丢弃、LLM 看不到它。
 
 ---
 
@@ -349,7 +351,7 @@ export default function (pi: ExtensionAPI) {
 - A: 工具被阻止。`emitToolCall` 在第一个返回 `{ block: true }` 的处理器处停止遍历。
 
 - Q: 如果 `tool_call` 处理器抛出异常会怎样？
-- A: 异常会传播到 agent session（不被 try/catch 捕获），阻止工具执行。这是唯一不被错误处理包裹的事件。
+- A: `AgentSession` 会先 catch 再 rethrow，但外层 `prepareToolCall()` 仍会把它收束成一个错误工具结果；工具不会进入 `executePreparedToolCall()`，而是走 error `ToolResultMessage` 路径。
 
 ### 练习 12: 理解 context 事件链
 
@@ -597,7 +599,7 @@ export default function (pi: ExtensionAPI) {
 
 **验证问题**:
 - Q: 合并后 `compaction.reserveTokens` 的值是什么？
-- A: 16000。`deepMergeSettings` 递归合并嵌套对象。项目级只覆盖了 `keepRecentTokens`，`reserveTokens` 保留全局值。
+- A: 16000。`deepMergeSettings` 对顶层 key 做合并，并对该 key 对应的对象做一层 `{ ...base, ...override }` 合并；这里项目级只覆盖了 `keepRecentTokens`，所以 `reserveTokens` 保留全局值。
 
 - Q: 如果项目级设置 `"defaultProvider": "openai"`，最终 provider 是什么？
 - A: `"openai"`。项目级覆盖全局级。原始值 `"anthropic"` 被替换。

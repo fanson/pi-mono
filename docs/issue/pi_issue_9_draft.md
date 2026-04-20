@@ -27,7 +27,7 @@ if (exitCode !== 0 && exitCode !== null) {
 }
 ```
 
-This `reject` flows to `packages/agent/src/agent-loop.ts` `executePreparedToolCall` catch block (lines 555-559):
+This `reject` flows to `packages/agent/src/agent-loop.ts` `executePreparedToolCall` catch block (lines 555-560):
 ```typescript
 } catch (error) {
     return {

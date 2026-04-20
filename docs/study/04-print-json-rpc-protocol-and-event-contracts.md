@@ -213,7 +213,8 @@ RPC 模式和 JSON print 都走 JSONL，但它们不是一回事。
 
 - 调用 `session.prompt(...)`
 - **不等待整个 agent run 完成**
-- 立即返回 `success`
+- 只有 `session.prompt(...)` 的 preflight 成功后，才输出 `success`
+- queued / immediately handled 的 prompt 也会被视为 preflight 成功
 - 后续 streaming / tool execution / agent_end 通过事件异步输出
 
 所以：
@@ -224,7 +225,7 @@ RPC 模式和 JSON print 都走 JSONL，但它们不是一回事。
 
 只表示：
 
-> “这个 prompt 命令被成功接收并启动了”
+> “这个 prompt 命令已经通过 preflight，并被成功接收 / 排队 / 处理”
 
 不表示：
 

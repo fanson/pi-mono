@@ -47,6 +47,10 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │       ├── emit(agent_start)
 │   │       ├── emit(turn_start)
 │   │       │
+│   │       ├── 对每个初始 prompt 发出
+│   │       │   ├── emit(message_start)
+│   │       │   └── emit(message_end)
+│   │       │
 │   │       └── runLoop(context, newMessages, config, signal, emit)
 │   │           │
 │   │           └── 外层循环:
@@ -70,17 +74,20 @@ AgentSession.prompt(text)                   ← coding-agent
 │   │                   │   │       ├── branchSummary → user + <summary>
 │   │                   │   │       └── compactionSummary → user + <summary>
 │   │                   │   │
-│   │                   │   └── streamSimple(model, llmContext)   ← pi-ai
-│   │                   │       │
-│   │                   │       └── resolveApiProvider(model.api)
-│   │                   │           └── 懒加载包装器
-│   │                   │               └── import("./anthropic.js")
-│   │                   │                   └── Anthropic SDK
+│   │                   │   └── sdk.ts 注入的 streamFn()
+│   │                   │       ├── modelRegistry.getApiKeyAndHeaders(model)
+│   │                   │       └── streamSimple(model, llmContext, { apiKey, headers })   ← pi-ai
+│   │                   │           │
+│   │                   │           └── resolveApiProvider(model.api)
+│   │                   │               └── 懒加载包装器
+│   │                   │                   └── import("./anthropic.js")
+│   │                   │                       └── Anthropic SDK
 │   │                   │
 │   │                   ├── executeToolCalls()
 │   │                   │   │
 │   │                   │   ├── executeToolCallsSequential()
-│   │                   │   │   └── 仅当全局 `toolExecution === "sequential"` 时进入
+│   │                   │   │   └── 全局 `toolExecution === "sequential"`
+│   │                   │   │      或本批存在 `executionMode === "sequential"` 的工具时进入
 │   │                   │   │
 │   │                   │   └── executeToolCallsParallel()
 │   │                   │       │
@@ -113,10 +120,13 @@ AgentSession.prompt(text)                   ← coding-agent
 │       └── 通知订阅者
 │
 └── AgentSession._handleAgentEvent(event)
-    ├── SessionManager.appendMessage()  // 持久化
-    ├── ExtensionRunner.emit(event)   // 扩展
-    ├── 检查自动压缩                   // 上下文是否过大
-    └── 处理错误/重试
+    ├── _createRetryPromiseForAgentEnd()   // 同步创建 retry promise
+    ├── _agentEventQueue.then(_processAgentEvent)
+    └── _processAgentEvent(event)
+        ├── ExtensionRunner.emit(event)    // 扩展先看见事件
+        ├── _emit(event)                   // 再通知 UI / listeners
+        ├── message_end → SessionManager.appendMessage()
+        └── agent_end → 检查自动压缩 / 重试
 ```
 
 ## 关键抽象边界
