@@ -20,7 +20,9 @@
 | 11 | [实战练习](11-hands-on-exercises.md) | 23 个动手练习 + 10 题综合测验，验证学习效果 |
 | 12 | [Compaction 深度对比](12-compaction-comparison.md) | Claude Code vs Pi 的压缩机制、触发策略、摘要生成、补水与错误恢复对比 |
 | 13 | [扩展功能对比](13-extended-feature-comparison.md) | Claude Code vs Pi 在 hooks、MCP、plans、session restore、cost tracker 等能力上的对比 |
-| 14 | [面试介绍文档](14-interview-introduction.md) | 30 秒 / 90 秒 / 5 分钟版本的项目介绍话术、亮点、限制与高频问答 |
+| 14 | [面试介绍文档](14-interview-introduction.md) | 30 秒 / 90 秒 / 5 分钟版本的项目介绍话术、亮点、限制与结尾模板 |
+| 15 | [面试速记版](15-interview-cheat-sheet.md) | 一页内压缩架构、调用链、亮点、限制与高风险易错点 |
+| 16 | [面试问答库](16-interview-question-bank.md) | 按主题整理的标准答法、追问与“面试官在试探什么” |
 
 ## 建议阅读顺序
 
@@ -32,7 +34,18 @@
 6. 读 **09 → 10**，补上设计模式、测试和贡献工作流
 7. 完成 **11** 的实战练习验证理解
 8. 补读 **12 / 13** 做横向比较，帮助形成“Pi 为什么这样设计、缺了什么、又故意没做什么”的面试表达
-9. 面试前最后读 **14**，把技术事实压缩成可复述的介绍话术
+9. 面试前先读 **15**，把全局地图、亮点、限制和易错点压缩成速记
+10. 再读 **14**，练 30 秒 / 90 秒 / 5 分钟讲述
+11. 最后刷 **16**，专门防追问
+
+## 面试冲刺顺序
+
+如果你的目标从“系统学习”切换成“准备面试”，不要再线性重读全套文档。直接按这个顺序：
+
+1. `15-interview-cheat-sheet.md` — 快速校准事实边界
+2. `14-interview-introduction.md` — 练项目介绍
+3. `16-interview-question-bank.md` — 防深挖
+4. `11-hands-on-exercises.md` — 只挑你最没把握的题抽查
 
 ## 配套源码
 

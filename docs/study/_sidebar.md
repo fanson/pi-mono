@@ -16,3 +16,5 @@
   - [12 - Compaction 对比: Claude Code vs Pi](12-compaction-comparison.md)
   - [13 - 扩展功能对比: Claude Code vs Pi](13-extended-feature-comparison.md)
   - [14 - 面试介绍文档](14-interview-introduction.md)
+  - [15 - 面试速记版](15-interview-cheat-sheet.md)
+  - [16 - 面试问答库](16-interview-question-bank.md)
