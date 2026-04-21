@@ -1,24 +1,28 @@
-# Issue Draft: stopReason "length" not handled
+# Issue Draft: stopReason "length" is not handled explicitly
 
 ---
 
 ## Title
 
-`agent-loop: stopReason "length" can cause execution of truncated tool calls`
+`agent-loop: stopReason "length" is not handled explicitly and may be treated as a complete turn`
 
 ## Body
 
-When the model hits the `max_output_tokens` limit, the response is truncated mid-stream with `stopReason: "length"`. The agent-loop doesn't handle this case, which can lead to executing tool calls with invalid (truncated) JSON arguments.
+When the model hits the output token limit, the assistant response can end with `stopReason: "length"`. The agent loop currently handles `"error"` and `"aborted"`, but not `"length"`.
+
+That means a truncated assistant turn is processed like a normal completion.
 
 **Steps to reproduce:**
 
-1. Start a pi session with a task that requires the model to generate a large response with multiple tool calls
-2. E.g. ask the agent to "create 10 files with detailed boilerplate content" — the model tries to output many `write` tool calls in one response
-3. If the combined output exceeds `maxTokens`, the response is truncated mid-tool-call
+1. Start a pi session with a task that requires a large assistant response, for example one that produces many tool calls
+2. If configurable in the environment, use a low output-token limit; otherwise ask for a response large enough to exceed the configured limit
+3. The assistant response ends with `stopReason: "length"`
+4. The agent loop continues as if the turn completed normally
 
-**What happens:**
+**Current behavior:**
 
-`packages/agent/src/agent-loop.ts` around line 194 only handles `"error"` and `"aborted"`:
+`packages/agent/src/agent-loop.ts` only special-cases `"error"` and `"aborted"`:
+
 ```typescript
 if (message.stopReason === "error" || message.stopReason === "aborted") {
     await emit({ type: "turn_end", message, toolResults: [] });
@@ -27,34 +31,36 @@ if (message.stopReason === "error" || message.stopReason === "aborted") {
 }
 ```
 
-`StopReason` in `packages/ai/src/types.ts` includes `"length"`:
+But `StopReason` in `packages/ai/src/types.ts` also includes `"length"`:
+
 ```typescript
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 ```
 
-And the stream protocol explicitly sends `"length"` as a `"done"` event reason (not an error):
-```typescript
-| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">; message: AssistantMessage }
-```
+So `"length"` is a defined outcome, but it is not handled explicitly in the loop.
 
-When `stopReason` is `"length"`, the code falls through to line 200-201 where it extracts tool calls from the truncated message. A tool call that was being generated when the truncation happened will have incomplete JSON arguments — the `toolcall_end` event was never emitted for it, so it may not even appear in `message.content`. But if the provider's stream parser partially constructs it, the arguments could be malformed.
+**Why this matters:**
+
+`"length"` means the assistant response was truncated. Treating it the same as a normal completed turn can lead to confusing behavior, especially when the response was cut off before the model could finish its intended output.
+
+The main risk is not invalid JSON by itself — tool call arguments are parsed into objects and validated later — but that an incomplete assistant turn can still flow into normal tool execution.
+
+This is especially relevant because some providers parse partial tool-call JSON incrementally and preserve the partially parsed arguments object in the assistant message even when the turn ends due to `"length"`.
 
 **Expected behavior:**
 
-At minimum: when `stopReason === "length"`, filter out any tool calls with unparseable arguments before executing. Ideally: inject a system/user message telling the model its output was truncated, so it can continue.
+When `stopReason === "length"`, the agent should treat the turn as incomplete and recover explicitly, for example by:
+
+- stopping before tool execution,
+- prompting the model to continue,
+- or otherwise surfacing that the last assistant turn was truncated.
 
 **Suggested fix:**
 
-不要用 `JSON.stringify(c.arguments)` 当作“参数完整”的判断条件。对一个已经构造成内存对象的 `arguments` 来说，
-`JSON.stringify()` 几乎不会因为“原始流被截断”而给出你真正想要的信号。
+Handle `stopReason === "length"` explicitly in `packages/agent/src/agent-loop.ts`.
 
-更可靠的方向是：
+A minimal fix could be to stop before tool execution when `stopReason === "length"` and surface that the assistant turn was truncated.
 
-1. 把 `stopReason === "length"` 当成一类显式状态，而不是普通 `done`
-2. 只执行那些**已经完整结束并且通过 schema/`validateToolArguments` 验证**的 tool call
-3. 对被截断的 assistant 输出补一条 steering/user message，告诉模型“上一条输出被截断，需要继续”
-4. 如果 provider 侧能暴露“toolcall_end 未完成”或部分 JSON 状态，优先基于那个真实信号过滤，而不是基于 `JSON.stringify`
+A better follow-up would be to emit a continuation message or another explicit signal so the model can continue from the truncated response.
 
-**Note:** I haven't been able to reliably trigger this in practice — it depends on the model generating a response large enough to hit the token limit. If the default `maxTokens` is already high enough that this rarely occurs, this might be low priority. But since `"length"` is a defined `StopReason` that the loop doesn't handle, it seems worth addressing defensively.
-
-Happy to submit a PR if this makes sense.
+**Note:** I have not been able to trigger this reliably in every environment. It depends on the model producing a response large enough to hit the token limit. Even so, since `"length"` is a defined `StopReason` and the loop does not handle it explicitly, it seems worth addressing defensively.

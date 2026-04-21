@@ -4,68 +4,51 @@
 
 ## Title
 
-`edit tool: no detection of external file modifications between read and write`
+`edit tool: external file modifications can be overwritten between read and write`
 
 ## Body
 
-The edit tool reads a file, applies string replacements, and writes the result — but doesn't check whether the file was modified externally between the read and write. If a linter, formatter, or another process modifies the file in that window, those changes are silently overwritten.
+The edit tool reads a file, applies replacements, and writes it back. It does not verify that the file stayed unchanged between the read and the write. If another process modifies the file in that window, those changes can be silently lost.
 
 **Steps to reproduce:**
 
-1. Set up a project with format-on-save (e.g. Prettier, ESLint fix, or Black for Python)
-2. Start a pi session and ask the agent to edit a file
-3. The agent reads the file, applies the edit, and writes it back
-4. If the formatter runs between the read and write (triggered by the IDE watching for changes), the formatter's changes are lost
+1. Use a project with a formatter, watcher, or other process that can modify files automatically
+2. Ask the agent to edit a file
+3. The edit tool reads the file and computes the replacement
+4. Another process changes the file before the write happens
+5. The edit tool writes the final content and overwrites the external change
 
-A more concrete scenario:
-1. The agent calls `write` to create a file → this triggers the IDE's format-on-save
-2. The agent then calls `edit` on the same file in the same turn
-3. The `edit` tool reads the file (now formatted), but if the formatter is still running or runs again, there's a race window
+**Current behavior:**
 
-**What happens:**
+`packages/coding-agent/src/core/tools/edit.ts` reads the file and writes it back inside `withFileMutationQueue(...)`, but there is no external-change check in between:
 
-`packages/coding-agent/src/core/tools/edit.ts` execute path around lines 357-382:
 ```typescript
-await withFileMutationQueue(absolutePath, async () => {
 const buffer = await ops.readFile(absolutePath);
 const rawContent = buffer.toString("utf-8");
-// ... normalize, apply edits ...
+...
 const finalContent = bom + restoreLineEndings(newContent, originalEnding);
 await ops.writeFile(absolutePath, finalContent);
-// ← No check that the file hasn't changed since the read
-});
 ```
 
-The `oldText` matching in `applyEditsToNormalizedContent` provides **partial** protection: if the external change modifies the same region being edited, `oldText` won't match and the edit fails (safe). But if the external change only modifies a **different** region of the file (e.g. the formatter fixes trailing whitespace at the end while the agent edits a function at the top), `oldText` still matches and the write succeeds — silently reverting the formatter's changes.
+`withFileMutationQueue()` only serializes tool calls within pi. It does not prevent external processes from modifying the same file.
 
-**Context:**
+The `oldText` matching in `applyEditsToNormalizedContent()` protects against some conflicts, but only when the external change affects the edited block. If the other process changes a different part of the file, the edit can still succeed and overwrite the external modification.
 
-Pi already has `file-mutation-queue.ts` which serializes concurrent tool calls that target the same file. This handles **internal** concurrency well. But it still doesn't cover **external** modifications (IDE formatters, git hooks, other processes) that happen between the read and write inside the queued critical section.
+**Why this is a problem:**
+
+Users can lose formatter output or other concurrent edits without any warning.
 
 **Expected behavior:**
 
-Detect that the file changed between read and write, and either:
-- Retry the edit against the new file contents, or
-- Return an error telling the model the file was modified externally
+The tool should make a best-effort attempt to detect external modification between read and write, and then either:
+
+- fail with a clear error so the model can re-read and retry, or
+- re-read and re-apply the edit against the latest content
 
 **Suggested fix:**
 
-Store the file's mtime (or a content hash) at read time, and compare before writing:
+Add a best-effort change check before writing, for example using a content hash or file metadata captured at read time.
 
-```typescript
-const statBefore = await fsStat(absolutePath);
-const buffer = await ops.readFile(absolutePath);
-// ... apply edits ...
-const statAfter = await fsStat(absolutePath);
-if (statAfter.mtimeMs !== statBefore.mtimeMs) {
-    throw new Error(
-        `File ${path} was modified externally during edit. ` +
-        `Re-read the file and retry the edit.`
-    );
-}
-await ops.writeFile(absolutePath, finalContent);
-```
+A minimal approach would be to store `mtime` or a hash after the read and compare it before the write. If the file changed, throw an error telling the model to re-read the file and retry the edit.
 
-**Note:** This is a race condition, so it won't catch 100% of cases (the file could be modified between the stat check and the write). But it catches the most common scenario (format-on-save) and is a significant improvement over the current behavior of zero detection. A more robust approach would use file locking, but that's significantly more complex.
-
-Happy to submit a PR if this makes sense.
+That would not eliminate every race, but it would catch common cases and reduce the risk of silent overwrites.

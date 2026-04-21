@@ -4,49 +4,62 @@
 
 ## Title
 
-`read tool: binary files (zip, sqlite, wasm, etc.) are decoded as UTF-8 garbage`
+`read tool: binary files like zip, sqlite, and wasm are decoded as UTF-8 text`
 
 ## Body
 
-The `read` tool checks whether a file is a supported image (jpeg/png/gif/webp) and handles those correctly. But non-image binary files fall through to the text path and get decoded as UTF-8, producing garbage output.
+The `read` tool currently treats any non-image file as text and decodes it as UTF-8. That works for plain text files, but it produces garbage output for binary files such as `.zip`, `.sqlite`, `.wasm`, and similar formats.
 
 **Steps to reproduce:**
 
-1. Create a project with a `.sqlite` or `.zip` file
-2. Ask the agent to read it (e.g. "read database.sqlite" or the agent tries to understand the project structure and reads it)
-3. The tool returns garbled UTF-8 text
+1. Create a project containing a binary file such as `database.sqlite` or `archive.zip`
+2. Ask the agent to read that file
+3. The tool returns unreadable UTF-8 output instead of identifying it as binary
 
-**What happens:**
+**Current behavior:**
 
-`packages/coding-agent/src/core/tools/read.ts` lines 186-188（`mimeType` 检查后的文本分支）:
+`packages/coding-agent/src/core/tools/read.ts` only has a special path for supported images:
+
 ```typescript
-} else {
-    // Read text content.
-    const buffer = await ops.readFile(absolutePath);
-    const textContent = buffer.toString("utf-8");
+if (mimeType) {
+    // Read image as binary.
 ```
 
-`detectSupportedImageMimeTypeFromFile` in `packages/coding-agent/src/utils/mime.ts` (lines 4, 22-24) uses `file-type` to sniff the format, but explicitly filters to only 4 image types:
+If the file is not recognized as an image, the tool falls through to:
+
+```typescript
+const buffer = await ops.readFile(absolutePath);
+const textContent = buffer.toString("utf-8");
+```
+
+`packages/coding-agent/src/utils/mime.ts` uses `file-type` to sniff the file, but it only returns a MIME type for four image formats:
+
 ```typescript
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-// ...
-if (!IMAGE_MIME_TYPES.has(fileType.mime)) {
-    return null;  // ← zip, sqlite, wasm all return null here
-}
 ```
 
-So a `.zip` file gets detected by `file-type` as `application/zip`, but that's discarded, and the buffer gets `.toString("utf-8")`.
+So a binary file that is recognized by `file-type` as a non-image format, for example `application/zip`, still falls through to the UTF-8 text path, and unrecognized binary files can do the same.
+
+**Why this is a problem:**
+
+Unsupported binary files should not be presented as text. The current behavior produces unreadable output and can mislead the model into thinking the file is textual.
 
 **Expected behavior:**
 
-Return something like `"Binary file: database.sqlite (24576 bytes). Cannot display as text."` instead of garbled output.
+When the file is binary, the tool should return a clear message such as:
 
-**Context:**
+- `Binary file: database.sqlite (24576 bytes). Cannot display as text.`
 
-Binary data has been addressed for bash output — `sanitizeBinaryOutput` in `utils/shell.ts` strips control characters to prevent crashes (that fix was for bash commands that pipe binary). But the `read` tool has a similar gap: it can detect binary *before* reading but currently doesn't.
+or another explicit binary-file notice.
 
 **Suggested fix:**
 
-Since `file-type` is already a dependency (used in `mime.ts`), the simplest fix is to check the sniff result before the image filter — if `fileType` is non-null and not a supported image, it's a known binary format. Alternatively, a null-byte check on the first few KB works for unknown formats that `file-type` doesn't recognize.
+Use the existing file-type sniffing to distinguish binary files from text files before the UTF-8 decode path.
 
-This is a small change in `read.ts` (or `mime.ts` could expose a broader `isBinaryFile` helper). Happy to submit a PR if this makes sense.
+A minimal fix could be:
+
+- keep the current image handling
+- detect known binary files and return a binary-file message instead of decoding them as UTF-8
+- optionally add a simple heuristic for unknown binary files, such as checking for null bytes in the first chunk
+
+A small helper in `mime.ts` or `read.ts` would keep the logic contained and avoid duplicating file-type checks.

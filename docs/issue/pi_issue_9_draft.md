@@ -4,22 +4,26 @@
 
 ## Title
 
-`bash tool: grep exit 1 (no match) and diff exit 1 (files differ) are treated as tool errors`
+`bash tool: exit code 1 from commands like grep and diff is treated as a tool error`
 
 ## Body
 
-When a bash command exits with a non-zero code, the tool always `reject`s with an Error, which surfaces as `isError: true` in the tool result sent back to the model. This is wrong for commands where non-zero exit codes carry normal semantics.
+When a bash command exits with a non-zero code, the tool currently rejects with an error, which is then surfaced to the model as `isError: true`.
+
+This is incorrect for some commands whose non-zero exit codes are part of normal semantics.
 
 **Steps to reproduce:**
 
 1. Start a pi session in any project
-2. Ask the agent to search for something that doesn't exist (e.g. "search for 'xyznonexistent' in the codebase")
-3. The agent runs `grep -r "xyznonexistent" .` which exits with code 1 (no match found)
-4. The model receives the result with `isError: true` and treats it as a failure
+2. Ask the agent to search for something that does not exist, for example: `search for "xyznonexistent" in the codebase`
+3. The agent runs `grep -r "xyznonexistent" .`
+4. `grep` exits with code `1`, which means “no matches found”
+5. The bash tool rejects the result and the model receives it as an error
 
-**What happens:**
+**Current behavior:**
 
-`packages/coding-agent/src/core/tools/bash.ts` lines 379-381:
+`packages/coding-agent/src/core/tools/bash.ts` treats every non-zero exit code as a failure:
+
 ```typescript
 if (exitCode !== 0 && exitCode !== null) {
     outputText += `\n\nCommand exited with code ${exitCode}`;
@@ -27,9 +31,10 @@ if (exitCode !== 0 && exitCode !== null) {
 }
 ```
 
-This `reject` flows to `packages/agent/src/agent-loop.ts` `executePreparedToolCall` catch block (lines 555-560):
+`packages/agent/src/agent-loop.ts` then converts that rejection into a tool error:
+
 ```typescript
-} catch (error) {
+catch (error) {
     return {
         result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
         isError: true,
@@ -37,56 +42,39 @@ This `reject` flows to `packages/agent/src/agent-loop.ts` `executePreparedToolCa
 }
 ```
 
-The `isError: true` flag is then passed through to the LLM API (e.g. Anthropic's `is_error` on `tool_result`), which signals to the model that the tool execution failed.
+As a result, the model sees normal command results as execution failures.
 
-**The problem:**
+This is not just presentation: provider adapters also propagate the tool error flag to the upstream API (for example Anthropic's `is_error` field on tool results), which can change how the model responds on the next turn.
 
-Several common commands use non-zero exit codes as normal return values:
+**Why this is a problem:**
 
-| Command | Exit 1 means | Error? |
-|---------|-------------|--------|
-| `grep` | no match found | No |
-| `diff` | files differ | No |
-| `test -f` / `[ -f ]` | condition is false | No |
-| `which` | command not found | No |
+Some common commands use exit code `1` to indicate a valid, expected outcome:
 
-When `grep` finds no matches, exit 1 is the expected result. But `isError: true` causes the model to apologize, retry with different flags, or explain that "the command failed" — instead of simply reporting "no matches found."
+| Command | Exit 1 means | Should be treated as error? |
+|---------|--------------|-----------------------------|
+| `grep`  | no match found | No |
+| `diff`  | files differ | No |
+| `test -f` / `[` | condition is false | No |
+
+For these commands, the model should receive the output normally instead of being told the tool failed.
 
 **Expected behavior:**
 
-For commands like `grep` and `diff`, exit code 1 should be resolved (not rejected), so the model sees the output as a normal tool result.
+Commands whose exit code `1` represents a normal outcome should be returned as successful tool results, not tool errors.
 
 **Suggested fix:**
 
-A small lookup table for well-known command semantics:
+Handle command-specific exit semantics in the bash tool.
 
-```typescript
-const NORMAL_EXIT_CODES: Record<string, Set<number>> = {
-    grep: new Set([1]),
-    egrep: new Set([1]),
-    fgrep: new Set([1]),
-    diff: new Set([1]),
-    test: new Set([1]),
-    which: new Set([1]),
-};
+A minimal first pass could recognize a small set of commands such as:
 
-function isNormalExitCode(command: string, exitCode: number): boolean {
-    const firstWord = command.trim().split(/\s+/)[0];
-    const basename = firstWord?.split("/").pop() ?? "";
-    return NORMAL_EXIT_CODES[basename]?.has(exitCode) ?? false;
-}
-```
+- `grep`
+- `diff`
+- `test`
+- `[` 
 
-Then in the exit code check:
-```typescript
-if (exitCode !== 0 && exitCode !== null) {
-    outputText += `\n\nCommand exited with code ${exitCode}`;
-    if (isNormalExitCode(command, exitCode)) {
-        resolve({ content: [{ type: "text", text: outputText }], details });
-    } else {
-        reject(new Error(outputText));
-    }
-}
-```
+For these commands, exit code `1` should resolve as a normal result, while other non-zero exit codes should still reject.
 
-Happy to submit a PR if this direction makes sense. The table can start small (grep, diff, test) and be extended over time.
+Command detection may also need to account for wrappers such as `env`, `sudo`, or absolute executable paths.
+
+A more robust follow-up would be to make acceptable exit codes configurable per command instead of hardcoding them in the tool.
